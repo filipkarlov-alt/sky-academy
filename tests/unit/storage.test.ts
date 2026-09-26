@@ -93,6 +93,18 @@ describe('rewards storage', () => {
     importSave(JSON.stringify({ v: SAVE_VERSION, coins: 0, boss: { year1: 'two', reception: 1 } }));
     expect(evaluateStickers(load())).toContain('shadow');   // the one real win still counts
   });
+  // #797: `sanitizeTypes()` guards `load()`'s import/corrupted-save path only, never `save()` — so a NaN
+  // reaching `addCoins()` used to write straight through and read back as the literal string "NaN" for the
+  // rest of the session, with no later reload to self-heal it. No caller does this today; pinned in case one
+  // ever does.
+  it('a non-finite amount never reaches the saved balance (#797)', () => {
+    save({ coins: 40, stickers: [STICKER_IDS[0]] });   // past the first threshold and already owned, so a real 0 crosses nothing new
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(addCoins(NaN)).toEqual([]);
+    expect(load().coins, 'the balance is untouched, not NaN').toBe(40);
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
   it('tutorial flag defaults to unseen and survives old saves without the field', () => {
     expect(load().tutorialSeen).toBe(false);
     mem['sna:v1'] = JSON.stringify({ v: 1, name: 'Old', coins: 5 });   // save written before the field existed
@@ -2634,5 +2646,23 @@ describe('a finished game is persisted in one write, or not at all (#365)', () =
     expect(out.fresh, 'already owned, so nothing is new').toEqual([]);
     expect(disked().stickers, 'and it is still owned — nothing is ever taken away (#114)')
       .toContain(STICKER_IDS[0]);
+  });
+  // #797: the same NaN-write gap `addCoins()` had, on the other coin-writing entry point. A non-finite
+  // `gameCoins` must not reach the saved total, and — since this is the one write a finished game gets (#365)
+  // — the dojo progress in the same call must still land rather than being dropped alongside the bad figure.
+  it('a non-finite gameCoins never reaches the saved balance, and the dojo half of the write still lands (#797)', () => {
+    // Pinned to a bonus-paying date (the same BONUS_DAY as the sticker test above) rather than `new Date()`:
+    // `memoryWin` only pays a dojo bonus on 68/400 dates, and on the rest `out.dojo.coins` is 0 — which would
+    // let this test pass even if the dojo addend were dropped from `total` entirely, not just the NaN term.
+    const BONUS_DAY = new Date('2026-01-13T12:00:00Z');
+    save({ coins: 4 });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const out = recordGameEnd(memoryWin, NaN, BONUS_DAY);
+    expect(out.dojo.coins, 'the fixture must actually earn a bonus, or this test proves nothing').toBeGreaterThan(0);
+    expect(disked().coins, 'the game\'s own NaN contributed nothing, only the dojo bonus landed')
+      .toBe(4 + out.dojo.coins);
+    expect(disked().dojo.date, 'the dojo state still landed').toBe(out.dojo.state.date);
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
   });
 });
