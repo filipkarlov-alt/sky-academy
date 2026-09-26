@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { e2eSpecFiles, workflow, workflowFiles } from './helpers/sources';
+import { code, e2eSpecFiles, workflow, workflowFiles } from './helpers/sources';
 
 /**
  * WORKFLOW RAILS (#321, split out of `guardrails.test.ts`) — everything that reads `.github/workflows/**`
@@ -190,6 +190,90 @@ describe('no workflow pins an action major GitHub has deprecated for Node 20 (#1
       expect(w, `${f} must exist under .github/workflows/, or this rail checks the wrong directory`).toBeDefined();
       expect(w!.text, `${f} must still check out the repo`).toMatch(/actions\/checkout@v\d+/);
     }
+  });
+});
+
+/**
+ * #765: the #147 rail above (`CI drops the Google Chrome apt source before installing browsers`) reads
+ * `ci.yml` by name, so it never saw `.github/workflows/e2e-speed-trial.yml` land with its own copy of the same
+ * two steps. Generalised here to every workflow file that installs Playwright browsers at all, rather than
+ * hand-copying the check per file — the same #111 lesson (a flat per-file list drifts the moment a new
+ * workflow file is added) applied to this incident instead.
+ *
+ * Prove it red: swap the order of the two steps in e2e-speed-trial.yml (install before the apt-source drop)
+ * and this rail fails; put them back and it passes. Also prove it red on a *second* install step with no drop
+ * of its own: a two-job fixture where job A correctly drops-then-installs and job B installs with no drop
+ * anywhere before it — `.indexOf()` on a single first-occurrence pair would lock onto job A's (correct) pair
+ * and pass regardless of job B, which is exactly the vacuous-pass shape a `silent-failure-hunter` review of
+ * this rail found before it ever reached a human reviewer. Every install is walked in file order instead,
+ * each requiring its own drop that has not already been used to justify an earlier install (`cursor` below) —
+ * still a whole-file text check rather than a real per-job parse (this file's rails are documented as exactly
+ * that, `.claude/rules/guardrails.md`), but no longer one that a second, undropped install can hide behind.
+ */
+describe('every workflow file that installs Playwright browsers drops the Google Chrome apt source first (#147, #765)', () => {
+  // Comments are stripped first, same reason as the #147 rail above: a workflow's own comment can name the
+  // very step it is missing (#129).
+  const withInstall = workflowFiles()
+    .map(({ name, text }) => ({ name, steps: text.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n') }))
+    .filter(({ steps }) => steps.includes('playwright install'));
+
+  const allIndicesOf = (haystack: string, needle: string): number[] => {
+    const at: number[] = [];
+    for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + 1)) at.push(i);
+    return at;
+  };
+
+  it('at least one workflow file installs Playwright browsers, or this rail checks nothing (#765)', () => {
+    expect(withInstall.length).toBeGreaterThan(0);
+  });
+
+  for (const { name, steps } of withInstall) {
+    it(`${name} drops the google-chrome apt source before every 'playwright install' step (#147, #765)`, () => {
+      const installs = allIndicesOf(steps, 'playwright install');
+      const drops = allIndicesOf(steps, 'sources.list.d/google-chrome');
+      expect(installs.length, `${name} must still install the browsers`).toBeGreaterThan(0);
+      expect(drops.length, `${name} must delete the google-chrome apt source before installing browsers (#147)`).toBeGreaterThan(0);
+      let cursor = -1;
+      for (const install of installs) {
+        expect(drops.some((drop) => drop > cursor && drop < install),
+          `${name}: the install at offset ${install} has no apt-source drop of its own between it and the ` +
+          'previous install — a drop already used to justify an earlier install does not count twice (#147)')
+          .toBe(true);
+        cursor = install;
+      }
+    });
+  }
+});
+
+/**
+ * #765: `tests/e2e/game.spec.ts` and `tests/e2e/duel.spec.ts` each carry their own copy of the `PW_FAST`
+ * validation (module scope is not shared between the two files), so nothing stopped one file's regex or error
+ * message drifting from the other's — e.g. one accepting `PW_FAST=8.5` while the other rejects it. Pinned as
+ * byte-identical rather than merged into a shared helper: `type-design-analyzer` found the duplication itself
+ * sound when #765 was filed, so this only pins the two copies together.
+ *
+ * Prove it red: edit either file's validation line (the regex or the thrown message) without the other, and
+ * this rail fails; make them match again and it passes.
+ *
+ * Comments are stripped first, the same #129 reason the apt-source rail above already strips them: a comment
+ * quoting this exact line (as both files' own surrounding prose already comes close to doing) must not let
+ * `indexOf` lock onto the comment instead of the real declaration.
+ */
+describe('the two PW_FAST validation blocks stay identical between game.spec.ts and duel.spec.ts (#765)', () => {
+  const files = e2eSpecFiles().map(({ name, text }) => ({ name, text: code(text) }));
+
+  const validationBlock = (name: string) => {
+    const f = files.find((f) => f.name === name);
+    expect(f, `${name} must exist under tests/e2e/`).toBeTruthy();
+    const at = f!.text.indexOf('const rawFast = process.env.PW_FAST;');
+    expect(at, `${name} must still carry the PW_FAST validation block`).toBeGreaterThan(-1);
+    const end = f!.text.indexOf('\n', f!.text.indexOf('\n', at) + 1);
+    expect(end, `${name}'s PW_FAST validation block must span two lines`).toBeGreaterThan(at);
+    return f!.text.slice(at, end);
+  };
+
+  it('game.spec.ts and duel.spec.ts validate PW_FAST with byte-identical code', () => {
+    expect(validationBlock('duel.spec.ts')).toBe(validationBlock('game.spec.ts'));
   });
 });
 
