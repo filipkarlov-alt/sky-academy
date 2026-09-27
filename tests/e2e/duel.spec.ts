@@ -129,7 +129,7 @@ test.describe('Ninja Duel', () => {
    * draw behind it was identical. `vx` and `g` carry the arc instead, and the *initial* wobble is held by
    * the deep-equality check in `tests/unit/duel.test.ts`, where no clock is running.
    */
-  test('guard rail: the two halves pose the identical wave — same order, same moments, same arcs (#389)', async ({ page }) => {
+  test('guard rail: the two halves pose the identical wave — same order, same moments, same arcs (#389)', { tag: '@smoke' }, async ({ page }) => {
     await startDuel(page, dojoSeeds('fresh'));
     await page.waitForFunction(() => window.__sna.bubbles('a').length > 0 && window.__sna.bubbles('b').length > 0);
     // Read off `arenas`, already on the hooks contract, rather than `bubbles()`: that one reports only the
