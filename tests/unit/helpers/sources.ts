@@ -52,4 +52,46 @@ export const inDir = (dir: string): [string, string][] => {
 // Comments may name the very thing a rail bans, so rails strip them first. Crude on purpose: a `//` inside
 // a string literal would blank the rest of that line — no such line exists in src/, and a rail that reads
 // slightly less is safer than one that goes red on prose.
-export const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, ' ');
+//
+// One thing it does track now: an *escaped* slash is never read as opening a comment (#775/#780). A textual
+// `/\*...\*\// ` scan has no notion of escaping, so a regex literal's own `\/` — an escaped slash, standing
+// for a literal "/" in whatever the regex matches — reads as a bare `/` the moment it is followed by `*` or
+// another `/`. `/a\/*/` (a real regex: `/a\//` with a `*` quantifier on the escaped slash) is misread as `/*`
+// opening a comment that only closes at the *next* literal `*/` anywhere later in the file, silently erasing
+// everything between, imports included; the same misreading happens to `\//` at a regex's own end — several
+// existing test files spell exactly that (`/^\.claude\/skills\//`, `/^icons\//`), the reason this fix changes
+// their own `code()` output too. Rather than try to tell a regex literal from division — division needs
+// knowing the previous *token*, not character, and still cannot be told from every other regex-carrying
+// context, and got two independently-confirmed regressions during review (a keyword-preceded regex misread as
+// division; a real `//` comment straight after a postfix `++`/`--` misread as a regex read that swallowed
+// part of it) — this scan does not try to identify a regex literal as a span at all. It only ever consumes an
+// escaped character as one atomic unit alongside its backslash, the same pairing real escape semantics use
+// (an even run of backslashes cancels out, leaving the next character unescaped) — so a comment's own opening
+// `/*` or `//`, never itself escaped, is always still seen, while a regex literal's internal `\/` never is.
+export const code = (src: string): string => {
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    if (ch === '\\' && i + 1 < src.length) {
+      out += src[i] + src[i + 1];
+      i += 2;
+      continue;
+    }
+    if (ch === '/' && src[i + 1] === '/') {
+      while (i < src.length && src[i] !== '\n') i++;
+      out += ' ';
+      continue;
+    }
+    if (ch === '/' && src[i + 1] === '*') {
+      i += 2;
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++;
+      i = Math.min(i + 2, src.length);
+      out += ' ';
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+};
