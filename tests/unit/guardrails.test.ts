@@ -2876,7 +2876,10 @@ describe('three.js: the src/three/ tree, the flag and the bundle (#714)', () => 
         // (silent-failure-hunter review; unreachable on this ESM-only project's real `src/` today since
         // `tsconfig.json`'s `module: ESNext` and the absent `@types/node` both already fail it, but the old
         // regex matched it by text and the walker should not need that gate to also be correct).
-        const text = specText(node.expression);
+        // #837: unwrap a parenthesized argument here too, for the same reason #829 does it on the other two
+        // branches — `import x = require(('x'))` is a real, parseable AST shape (a ParenthesizedExpression
+        // wrapping the string literal), even though it too fails this project's own `tsc --noEmit` gate.
+        const text = specText(unwrapParens(node.expression));
         if (text !== null) push(text, 'require');
       } else if (
         ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
@@ -2965,6 +2968,24 @@ describe('three.js: the src/three/ tree, the flag and the bundle (#714)', () => 
 
   it('import x = require(\'x\') counts as require, even though it is never a CallExpression (#736 review)', () => {
     expect(edges('/src/ui/x.ts', "import rig = require('../three/stage/rig');"))
+      .toEqual([{ from: '/src/ui/x.ts', spec: '../three/stage/rig', to: '/src/three/stage/rig', kind: 'require' }]);
+  });
+
+  // #837: the ExternalModuleReference branch read node.expression straight into specText() with no
+  // paren-unwrapping, unlike the other two branches #829 fixed — a paren-wrapped argument here
+  // (`import x = require(('x'))`) is a real, parseable AST shape (confirmed via the bare TypeScript parser)
+  // even though it cannot appear in this project's own compiling `src/` tree, the same reasoning #829 already
+  // applies to the sibling moduleSpecifier case.
+  it('import x = require((\'x\')) still counts as require, paren-wrapped and all (#837)', () => {
+    expect(edges('/src/ui/x.ts', "import rig = require(('../three/stage/rig'));"))
+      .toEqual([{ from: '/src/ui/x.ts', spec: '../three/stage/rig', to: '/src/three/stage/rig', kind: 'require' }]);
+  });
+
+  // pr-test-analyzer (#837 review): unwrapParens is recursive, so a doubly-parenthesized argument here
+  // (two extra layers, not just #837's one) already works too — a coverage gap in the tests, not a second
+  // defect, the same shape PR #825 pinned for import.meta.glob's own recursive unwrap. Pinned here.
+  it('import x = require(((\'x\'))) — two extra layers of parens — still counts as require', () => {
+    expect(edges('/src/ui/x.ts', "import rig = require(((('../three/stage/rig'))));"))
       .toEqual([{ from: '/src/ui/x.ts', spec: '../three/stage/rig', to: '/src/three/stage/rig', kind: 'require' }]);
   });
 
