@@ -210,18 +210,21 @@ describe('the shared rail readers cannot go blind (#321)', () => {
       .not.toContain('ratio note');
   });
 
-  // #816: the documented safe-direction edge — an odd (3+) backslash run immediately before a real comment
-  // opener reads the last backslash as escaping the opener's own slash, so the comment survives unstripped.
-  // Unreachable from any compiling TypeScript (a literal only closes on an even backslash run), so this is a
-  // pin on the documented no-op behaviour rather than a regression test for a real bug, matching this file's
-  // own pattern of a companion test beside every documented `code()` nuance.
-  it('code() leaves an odd (3+) backslash run before a real comment opener unstripped (#816)', () => {
+  // #816 documented a "safe direction" no-op for this shape under the old hand-rolled scanner: a bare run of
+  // backslashes has no meaning outside a string in real JavaScript/TypeScript, but that scanner's own
+  // escape-pairing (needed to see past a regex literal's `\/`, #775/#780) read an odd run as escaping the
+  // comment opener's own slash regardless. #827's move to the real parser (see the long comment above
+  // `code()`) retires that scanner and its pairing along with it: a bare backslash outside a string is not
+  // valid TypeScript and the parser does not attach any escaping meaning to it, so `//`/`/*` immediately after
+  // one is read as the real comment it is. This is not a fixture reachable from compiling `src/**/*.ts`
+  // either way (`tsc` rejects a bare backslash there), so this pins the new behaviour rather than reopening a
+  // live bug.
+  it('code() strips a real comment even after a run of backslashes that carry no escaping meaning outside a string (#827)', () => {
     const block = '\\\\\\/* kept */ realCode();';
-    expect(code(block), 'three backslashes against a real /* must leave the comment unstripped, output unchanged')
-      .toBe(block);
+    expect(code(block), 'a bare backslash run has no meaning outside a string, so the real /* comment must strip')
+      .toBe('\\\\\\  realCode();');
     const line = '\\\\\\// kept\nrealCode();';
-    expect(code(line), 'three backslashes against a real // must leave the comment unstripped, output unchanged')
-      .toBe(line);
+    expect(code(line), 'and the same for a real // comment straight after one').toBe('\\\\\\ \nrealCode();');
   });
 
   // #816: an unterminated /* used to swallow everything after it to a single space, no error — the same
@@ -242,5 +245,117 @@ describe('the shared rail readers cannot go blind (#321)', () => {
       .toThrow(/unterminated \/\* comment/);
     expect(code('const a = 1; /* closed */ const b = 2;'), 'a properly closed comment must still be stripped')
       .toBe('const a = 1;   const b = 2;');
+  });
+
+  // pr-test-analyzer review of #827: an unterminated string, regex or template literal is a different failure
+  // mode from the #816 case above — the real TypeScript parser recovers from each with a token, never a
+  // trivia gap, so `stripTrivia`'s own unterminated-`/*` throw never engages, and this reader is silent either
+  // way. No real src/*.ts file can hit any of the three (tsc rejects all of them, the same reason #816's own
+  // throw is unreachable from real source), so the bar here is only "does not corrupt output", not "throws" —
+  // and it does not: an unterminated string or regex recovers to end-of-line, so a real comment further down
+  // the file is still found and stripped past it; an unterminated template literal recovers to end-of-*file*
+  // (a template literal can hold a real newline), so nothing after it — including a real trailing comment —
+  // is reachable at all, and it survives unstripped. A false negative either way, the same safe direction
+  // #816's own backslash-run edge already takes, never a false positive that drops real code.
+  it('code() does not corrupt output on an unterminated string, regex or template literal (#827)', () => {
+    const trailing = 'const b = 1; // real trailing\n';
+    expect(code(`const a = 'never closed /* not a real comment */\n${trailing}`),
+      'an unterminated string recovers to end-of-line, so the real trailing comment past it is still stripped')
+      .not.toContain('real trailing');
+    expect(code(`const a = /never closed /* not a real comment */\n${trailing}`),
+      'an unterminated regex recovers to end-of-line too, so the real trailing comment is still stripped')
+      .not.toContain('real trailing');
+    expect(code(`const a = \`never closed /* not a real comment */\n${trailing}`),
+      'an unterminated template recovers only at EOF, so nothing past it — the real comment included — is reachable')
+      .toContain('real trailing');
+  });
+
+  // #827: a /*-shaped substring sitting inside an ordinary string literal is not a real comment open, but the
+  // scan above has no notion of string boundaries — it only ever tracks escape pairs and regex-adjacent
+  // slashes, never a quote. `tests/unit/governance.test.ts` itself has exactly this shape in a plain string:
+  // 'docs' + '/' + '*' + '-PROMPT.md' reads as `/*`. Built by concatenation here for the same #836 reason the
+  // test above already gives — so this file's own raw text never contains the shape it is pinning.
+  it('code() does not read a /*-shaped substring inside a string literal as opening a real comment (#827)', () => {
+    const glob = 'docs' + '/' + '*' + '-PROMPT.md';
+    const src = `const msg = 'the ${glob} rail'; realCode(); /* real comment */`;
+    const out = code(src);
+    expect(out, 'the string literal must survive untouched').toContain(`'the ${glob} rail'`);
+    expect(out, 'the real code after the string must not be swallowed').toContain('realCode();');
+    expect(out, 'the real trailing comment must still be stripped').not.toContain('real comment');
+  });
+
+  // The exact shape the finding was filed against: no closing */ anywhere later in the file either, which
+  // #816's throw above used to (wrongly) treat as a real unterminated comment.
+  it('code() does not throw on a /*-shaped substring inside a string with no */ anywhere in the file (#827)', () => {
+    const glob = 'docs' + '/' + '*' + '-PROMPT.md';
+    const src = `const msg = 'the ${glob} rail';`;
+    expect(() => code(src), 'a string is not a comment, however it is spelled, so this must not throw').not.toThrow();
+    expect(code(src)).toBe(src);
+  });
+
+  // A comment that is genuinely inside a string on both sides of a real quote must still be left alone, and a
+  // quote character escaped inside a string must not be read as closing it early.
+  it('code() leaves a string containing a quote-escaped apostrophe and a `/` untouched', () => {
+    const src = "const msg = 'it\\'s a path: a/b'; // real comment\n";
+    expect(code(src), 'the escaped apostrophe must not end the string early, and the string must survive')
+      .toContain("'it\\'s a path: a/b'");
+    expect(code(src), 'the real trailing comment must still be stripped').not.toContain('real comment');
+  });
+
+  // #827: a template literal's `${...}` is real code, not string content — `src/ui/profiles.ts`'s render has a
+  // genuine `//` comment inside one (naming `avatarById` to explain why it is *not* used, the same
+  // banned-token-in-a-comment shape the very first test above pins). Treating the whole backtick span as
+  // opaque text, the naive fix for the bug above, stops stripping that real comment.
+  it('code() strips a real comment sitting inside a template literal\'s `${...}` interpolation (#827)', () => {
+    const src = 'const html = `<div>${list.map((x) => {\n'
+      + '  // avatarById: not the real name, just naming the shape\n'
+      + '  return x;\n'
+      + '})}</div>`;';
+    const out = code(src);
+    expect(out, 'the comment inside the interpolation must be stripped like any other comment')
+      .not.toContain('avatarById');
+    expect(out, 'the real code either side of the comment, inside the interpolation, must survive')
+      .toContain('return x;');
+    expect(out, 'the template literal text outside the interpolation must survive')
+      .toContain('<div>${');
+  });
+
+  // A nested object literal inside `${...}` has its own `{`/`}`, which must not be mistaken for the
+  // interpolation's own closing brace, and a nested string inside it must not leak its own braces either.
+  it('code() finds the interpolation\'s own closing brace past a nested object literal and a nested string (#827)', () => {
+    const src = "const html = `${fn({ a: 1, s: '{not a close}' })} after`;";
+    expect(code(src), 'nested braces and a brace-shaped string inside the interpolation must not end it early')
+      .toBe(src);
+  });
+
+  // pr-test-analyzer review of an earlier draft of this fix (a hand-rolled string/template-literal tracker,
+  // the same kind of scanner #775/#780 already fought and #827's rationale comment above explains abandoning):
+  // a quote character sitting inside a regex literal — `esc()` in the real `src/ui/dom.ts`, `familyOf()` in
+  // the real `src/ui/font.ts` both have one, `/[&<>"]/g` — was read by that scanner as opening a real string,
+  // since it had no notion of a regex literal either. That swallowed unrelated real code as "string content"
+  // until a later, unrelated quote happened to close it again, un-stripping the next real comment in the
+  // file. The real parser used now has no such gap: a regex literal is one token, quote characters and all.
+  it('code() does not read a quote character inside a regex literal as opening a real string (#827)', () => {
+    const src = 'const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ \'&\': 1 }[c]));\n/** realComment */\nconst x = 1;';
+    const out = code(src);
+    expect(out, 'the regex literal, quote and all, must survive untouched').toContain('/[&<>"]/g');
+    expect(out, 'the real doc comment after it must still be stripped, not left readable by a desynced tracker')
+      .not.toContain('realComment');
+  });
+
+  // silent-failure-hunter review of the same earlier draft: its interpolation-depth counter treated every
+  // `{`/`}` character inside `${...}` as belonging to the interpolation's own nesting, including one sitting
+  // inside a regex literal with no notion of a regex literal to skip past whole (`/}/ ` — one `}`, unbalanced
+  // by construction, since regex braces are not JavaScript's braces). That closed the interpolation frame
+  // early and desynced everything after it for the rest of that template literal, un-stripping a real comment
+  // a few characters later. The real parser sees `/}/ ` as one regex-literal token and never as a stray `}`.
+  it('code() does not read an unbalanced brace inside a regex literal, inside a template interpolation, as closing the interpolation (#827)', () => {
+    const src = 'const s = `x${/}/.test(y) /* realComment */ + 1}z`;\nconst after = 1; // trailing\n';
+    const out = code(src);
+    expect(out, 'the regex literal must survive untouched').toContain('/}/.test(y)');
+    expect(out, 'the real comment inside the interpolation must still be stripped').not.toContain('realComment');
+    expect(out, 'the template literal text past the interpolation must survive').toContain('z`;');
+    expect(out, 'and the real trailing comment, now correctly outside any confused string state, must strip too')
+      .not.toContain('trailing');
   });
 });
