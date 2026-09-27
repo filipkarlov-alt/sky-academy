@@ -900,17 +900,18 @@ describe('guard rails', () => {
   // order-free before letting it stand.
   it("' · ' reaches a hint/listen field only from the three generators contentList's premise names (#453 item 2)", () => {
     // The exact three lines, not a count (PR #692 review round 1): a count plus "each file represented" lets a
-    // swap through — drop one of maths.ts's two known lines while adding an unrelated new one to the same
+    // swap through — drop one of a file's two known lines while adding an unrelated new one to the same
     // file, and both the total and the per-file presence check stay exactly as they were. Pinning the lines
-    // themselves is what a swap cannot pass through unnoticed.
+    // themselves is what a swap cannot pass through unnoticed. #325 stage 4 moved `measureCompare` and
+    // `soundQ` (both shared across years) into util.ts and `y2Temp` into year2.ts.
     const hits = inDir('/src/curriculum/').flatMap(([file, src]) =>
       code(src).split('\n')
         .filter(line => /\b(?:hint|listen):/.test(line) && line.includes(' · '))
         .map(line => `${file}: ${line.trim()}`));
     expect(hits, "a new or changed ' · ' hint/listen line — check it is genuinely unordered before updating this list").toEqual([
-      "/src/curriculum/maths.ts: hint: cols.map((c, i) => `${c} ${noun}: ${vals[i]} ${unit}`).join(' · '), hintIsData: true,",
-      "/src/curriculum/maths.ts: return wordQ(rng, `Which was ${warmer ? 'warmer' : 'colder'}?`, first ? ca : cb, [first ? cb : ca], { hint: `${ca}: ${a}°C · ${cb}: ${b}°C`, hintIsData: true, say: `${ca} was ${a} degrees. ${cb} was ${b} degrees. Which was ${warmer ? 'warmer' : 'colder'}?` });",
-      "/src/curriculum/writing.ts: return wordQ(rng, '🔊 Listen!', g, ds, { say: `Listen: ${ws.join(', ')}. Which sound do they ${where}?`, listen: ws.join(' · '), hint: `Slice the sound at the ${pos}`, hintIsData: false });",
+      "/src/curriculum/util.ts: hint: cols.map((c, i) => `${c} ${noun}: ${vals[i]} ${unit}`).join(' · '), hintIsData: true,",
+      "/src/curriculum/util.ts: return wordQ(rng, '🔊 Listen!', g, ds, { say: `Listen: ${ws.join(', ')}. Which sound do they ${where}?`, listen: ws.join(' · '), hint: `Slice the sound at the ${pos}`, hintIsData: false });",
+      "/src/curriculum/year2.ts: return wordQ(rng, `Which was ${warmer ? 'warmer' : 'colder'}?`, first ? ca : cb, [first ? cb : ca], { hint: `${ca}: ${a}°C · ${cb}: ${b}°C`, hintIsData: true, say: `${ca} was ${a} degrees. ${cb} was ${b} degrees. Which was ${warmer ? 'warmer' : 'colder'}?` });",
     ]);
   });
 
@@ -3208,8 +3209,8 @@ describe('three.js: the src/three/ tree, the flag and the bundle (#714)', () => 
   // file at or past the 300-line bar this table is scoped to — joins it rather than going unbudgeted;
   // `slicing.ts` (16 lines) and `particles.ts` (56) are both well under that bar.
   const RATCHET: Record<string, number> = {
-    'src/style.css': 1870, 'src/storage.ts': 1511, 'src/game/arena.ts': 566, 'src/game/bubbles.ts': 521, 'src/curriculum/maths.ts': 993,
-    'src/curriculum/writing.ts': 701, 'src/ui/duel.ts': 507, 'src/ui/parents.ts': 451, 'src/ui/play-session.ts': 435,
+    'src/style.css': 1870, 'src/storage.ts': 1511, 'src/game/arena.ts': 566, 'src/game/bubbles.ts': 521,
+    'src/curriculum/year2.ts': 799, 'src/curriculum/util.ts': 543, 'src/ui/duel.ts': 507, 'src/ui/parents.ts': 451, 'src/ui/play-session.ts': 435,
     'src/game/session.ts': 395, 'src/game/duel.ts': 395, 'src/ui/play.ts': 360, 'src/ui/certificate.ts': 341, 'src/audio.ts': 311,
   };
   it.each(Object.entries(RATCHET))('%s has not grown past %i lines (#714 ratchet)', (file, cap) => {
