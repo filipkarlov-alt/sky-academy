@@ -155,17 +155,41 @@ const collectSpans = (node: ts.Node, sourceFile: ts.SourceFile, src: string, int
   for (const child of children) collectSpans(child, sourceFile, src, into);
 };
 
-export const code = (src: string): string => {
-  const sourceFile = ts.createSourceFile('code.ts', src, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
-  const spans: Span[] = [];
-  collectSpans(sourceFile, sourceFile, src, spans);
+// Assembles the final string from the spans `collectSpans` found, left to right. Split out from `code()`
+// so the ordering invariant it depends on — spans arrive non-overlapping and never run backwards, which
+// `collectSpans`'s own left-to-right traversal already guarantees — can be pinned with a synthetic span
+// list (#844, type-design-analyzer): the real parser cannot be driven to produce an out-of-order span, so
+// this is reachable only if a future edit to `collectSpans` breaks that guarantee, and a broken guarantee
+// must corrupt loudly (`stripTrivia(src, from, to)` with `from > to` would otherwise silently return `''`,
+// dropping or re-emitting source text with no error) rather than the way #816 already treats an unterminated
+// comment. Exported for that one test; no other caller needs it — `spans` must already be left-to-right
+// and non-overlapping (`collectSpans`'s own contract), and the guard below is what enforces that on a
+// caller's behalf rather than trusting it silently.
+//
+// Two different-shaped violations, both checked (silent-failure-hunter review of this diff, #844): a span
+// starting before the previous one ended (`span.start < pos`) is the one the comment above already argues
+// for, but a span whose own `end` is before its own `start` slips past that check untouched — `pos` is not
+// yet corrupted when this span is reached, so `span.start < pos` can still be false, and `src.slice(start,
+// end)` with `end < start` then silently returns `''` while `pos` is set *backwards*, so the *next* span's
+// `stripTrivia(pos, next.start)` re-reads and duplicates a stretch of source already emitted — the same
+// silent corruption this guard exists to rule out, reached by a different malformed span.
+export const assemble = (src: string, spans: Span[]): string => {
   let out = '';
   let pos = 0;
   for (const span of spans) {
+    if (span.start < pos || span.end < span.start)
+      throw new Error(`code(): span [${span.start}, ${span.end}) is out of order after the previous span ended at ${pos} — collectSpans must be broken`);
     out += stripTrivia(src, pos, span.start);
     out += span.comment ? ' ' : src.slice(span.start, span.end);
     pos = span.end;
   }
   out += stripTrivia(src, pos, src.length);
   return out;
+};
+
+export const code = (src: string): string => {
+  const sourceFile = ts.createSourceFile('code.ts', src, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  const spans: Span[] = [];
+  collectSpans(sourceFile, sourceFile, src, spans);
+  return assemble(src, spans);
 };

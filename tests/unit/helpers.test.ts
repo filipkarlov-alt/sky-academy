@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { code, e2eSpecFiles, inDir, SOURCES, styleCss, workflow, workflowFiles } from './helpers/sources';
+import { assemble, code, e2eSpecFiles, inDir, SOURCES, styleCss, workflow, workflowFiles } from './helpers/sources';
 
 /**
  * The readers four rail files share (#321). Until the split each of them was a `const` at the top of one
@@ -357,5 +357,97 @@ describe('the shared rail readers cannot go blind (#321)', () => {
     expect(out, 'the template literal text past the interpolation must survive').toContain('z`;');
     expect(out, 'and the real trailing comment, now correctly outside any confused string state, must strip too')
       .not.toContain('trailing');
+  });
+
+  // #844 finding 1: the existing "unterminated regex" test above (`code() does not corrupt output on an
+  // unterminated string, regex or template literal`) doesn't actually produce an unterminated regex token —
+  // its fixture's second `/` closes the literal validly (`RegularExpressionLiteral [10,23] "/never closed"`,
+  // confirmed against the real parser's own AST), so that test exercises ordinary parser garbage-recovery,
+  // not the unterminated-regex path its own comment claims. This fixture genuinely never closes the regex:
+  // nothing between the opening `/` and end-of-line is a second unescaped `/`.
+  it('code() does not corrupt output on a genuinely unterminated regex literal (#827/#844)', () => {
+    const src = 'const a = /never closed\nconst b = 1; // real trailing\n';
+    const out = code(src);
+    expect(out, 'an unterminated regex recovers to end-of-line, so the real trailing comment past it is still stripped')
+      .not.toContain('real trailing');
+    expect(out, 'the unterminated regex\'s own text must survive, not be dropped along with the comment')
+      .toContain('never closed');
+    expect(out, 'the real statement past the unterminated regex must survive too').toContain('const b = 1;');
+  });
+
+  // #844 finding 2: a template literal nested inside another template's `${...}` interpolation — named by
+  // this fix's own title ("track string/template-literal boundaries") but never pinned. A real comment sitting
+  // inside the *inner* interpolation must still be found and stripped, the same as the outer-interpolation case
+  // above, and the inner template's own backticks must not desync collectSpans's walk of the outer one.
+  it('code() strips a real comment inside a template literal nested inside another template\'s interpolation (#844)', () => {
+    const src = 'const html = `outer ${`inner ${/* realComment */ x}`} end`;';
+    const out = code(src);
+    expect(out, 'the comment inside the nested interpolation must be stripped').not.toContain('realComment');
+    expect(out, 'the inner template literal\'s own text must survive').toContain('inner ${');
+    expect(out, 'the outer template literal\'s text past the nesting must survive').toContain('end`;');
+  });
+
+  // #844 finding 3: a template literal spanning several lines, closed properly (not the #827 unterminated
+  // case above), with a comment-shaped substring on one of its lines. `code()` never recurses into a template
+  // token with no interpolation — it is one leaf span — so the substring must survive untouched, and a real
+  // comment after the template's closing backtick must still be found.
+  it('code() leaves a comment-shaped substring inside a closed multi-line template literal untouched (#844)', () => {
+    const src = 'const html = `line1\n/* not a comment */\nline2`; // real trailing\n';
+    const out = code(src);
+    expect(out, 'the comment-shaped substring inside the template literal must survive, not be read as a real comment')
+      .toContain('/* not a comment */');
+    expect(out, 'the real trailing comment after the template literal must still be stripped')
+      .not.toContain('real trailing');
+  });
+
+  // #844 finding 4: two real comments with no code between them — `stripTrivia`'s loop must run its own
+  // comment branches twice in the same trivia gap rather than stopping after the first. Both block-comment
+  // and line-comment adjacency are checked; the code either side of the pair must survive.
+  it('code() strips two real comments in a row with no code between them (#844)', () => {
+    expect(code('const a = 1; /* a */ /* b */ const b = 2;'), 'both adjacent block comments must go, the code either side must stay')
+      .toBe('const a = 1;     const b = 2;');
+    const out = code('const a = 1; // a\n// b\nconst b = 2;');
+    expect(out, 'both adjacent line comments must go').not.toMatch(/\/\/\s*[ab]\b/);
+    expect(out, 'the code either side of the pair must survive').toContain('const a = 1;');
+    expect(out).toContain('const b = 2;');
+  });
+
+  // #844 finding 5 (type-design-analyzer): `assemble()`'s own ordering invariant — spans arrive left to
+  // right and never overlap, which `collectSpans`'s traversal already guarantees and the real parser cannot
+  // be driven to violate. Pinned directly with a synthetic span list, since no real source can trigger it:
+  // an out-of-order span must throw rather than let `stripTrivia(src, from, to)` silently return `''` for
+  // `from > to` and corrupt the output. A normal, correctly-ordered span list must still assemble as before.
+  it('assemble() throws on an out-of-order span instead of silently corrupting output (#844)', () => {
+    const src = 'const a = 1; const b = 2;';
+    expect(() => assemble(src, [
+      { start: 6, end: 12, comment: false },
+      { start: 0, end: 5, comment: false },
+    ]), 'a span starting before the previous one ended must be loud, not silently corrupt the output')
+      .toThrow(/span \[0, 5\) is out of order after the previous span ended at 12/);
+    expect(assemble(src, [
+      { start: 0, end: 5, comment: false },
+      { start: 6, end: 12, comment: false },
+    ]), 'a correctly-ordered span list must assemble exactly as code() itself would')
+      .toBe(src);
+  });
+
+  // silent-failure-hunter review of the #844 fix above: the `span.start < pos` guard alone lets a
+  // differently-shaped malformed span through untouched — one whose own `end` is before its own `start`.
+  // `pos` is not yet corrupted when such a span is reached, so `span.start < pos` can still be false; without
+  // this second check, `src.slice(span.start, span.end)` would silently return `''` for `end < start`
+  // (dropping that span's text), and `pos` would then be set *backwards* to that `end`, so the *next* span's
+  // `stripTrivia(pos, next.start)` would re-read and duplicate a stretch of source already emitted — the
+  // exact silent-corruption shape this guard exists to rule out, reached by a different malformed span.
+  // Reproduced directly before this test existed: the three-span list below produced
+  // `'const a = 1; const bonst b = 2; const c = 3;'` with no exception, under a guard that only checked
+  // `span.start < pos`.
+  it('assemble() throws on a span whose own end is before its own start, not just an out-of-order one (#844)', () => {
+    const src = 'const a = 1; const b = 2; const c = 3;';
+    expect(() => assemble(src, [
+      { start: 6, end: 12, comment: false },
+      { start: 20, end: 14, comment: false },
+      { start: 27, end: 33, comment: false },
+    ]), 'a span with end before its own start must be loud, not silently drop text and corrupt everything after it')
+      .toThrow(/span \[20, 14\) is out of order after the previous span ended at 12/);
   });
 });
