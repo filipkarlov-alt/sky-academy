@@ -155,17 +155,30 @@ const collectSpans = (node: ts.Node, sourceFile: ts.SourceFile, src: string, int
   for (const child of children) collectSpans(child, sourceFile, src, into);
 };
 
-export const code = (src: string): string => {
-  const sourceFile = ts.createSourceFile('code.ts', src, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
-  const spans: Span[] = [];
-  collectSpans(sourceFile, sourceFile, src, spans);
+// Assembles the final string from the spans `collectSpans` found, left to right. Split out from `code()`
+// so the ordering invariant it depends on — spans arrive non-overlapping and never run backwards, which
+// `collectSpans`'s own left-to-right traversal already guarantees — can be pinned with a synthetic span
+// list (#844, type-design-analyzer): the real parser cannot be driven to produce an out-of-order span, so
+// this is reachable only if a future edit to `collectSpans` breaks that guarantee, and a broken guarantee
+// must corrupt loudly (`stripTrivia(src, from, to)` with `from > to` would otherwise silently return `''`,
+// dropping or re-emitting source text with no error) rather than the way #816 already treats an unterminated
+// comment. Exported for that one test; no other caller needs it.
+export const assemble = (src: string, spans: Span[]): string => {
   let out = '';
   let pos = 0;
   for (const span of spans) {
+    if (span.start < pos) throw new Error(`code(): span starts at ${span.start}, before the previous span ended at ${pos} — collectSpans must be broken`);
     out += stripTrivia(src, pos, span.start);
     out += span.comment ? ' ' : src.slice(span.start, span.end);
     pos = span.end;
   }
   out += stripTrivia(src, pos, src.length);
   return out;
+};
+
+export const code = (src: string): string => {
+  const sourceFile = ts.createSourceFile('code.ts', src, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  const spans: Span[] = [];
+  collectSpans(sourceFile, sourceFile, src, spans);
+  return assemble(src, spans);
 };
