@@ -535,14 +535,14 @@ describe('the browser runs after the agents, not before them (#499)', () => {
     if (cmd.includes('playwright test')) return true;
     return nestedRefs(cmd).some((ref) => runsPlaywright(scripts, ref, seen));
   };
-  // #806: no anchors meant a shorter recognised alternative could substring-match inside a longer, unrelated
-  // sibling name — `[\w:]` after each alternative is this project's own namespacing convention (colon-joined
-  // segments; no script here uses `.`/`-` inside its name), so a match can no longer be immediately followed
-  // by another name character.
+  // #806/#821: no anchors meant a shorter recognised alternative could substring-match inside a longer,
+  // unrelated sibling name. The lookahead's character class must cover the same script-name characters
+  // `nestedRefs` above recognises (`[\w:.-]`) rather than only `[\w:]` — this project's naming convention
+  // happens to be colon-joined today, but a future `.`/`-` name must not reopen the #762/#806 collision.
   const browserCommandRegex = (scripts: Record<string, string>) => new RegExp(
     ['playwright test', ...Object.keys(scripts).filter((name) => runsPlaywright(scripts, name)).map((name) => `npm run ${name}`)]
       .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-      .map((s) => `${s}(?![\\w:])`)
+      .map((s) => `${s}(?![\\w:.-])`)
       .join('|'),
   );
   const pkgScripts = (JSON.parse(doc('package.json')) as { scripts: Record<string, string> }).scripts;
@@ -583,6 +583,33 @@ describe('the browser runs after the agents, not before them (#499)', () => {
     expect(runsPlaywright(scratch, 'test:e2e:report'), 'this sibling does run playwright, under its own name').toBe(true);
     const match = browserCommandRegex(scratch).exec('before npm run test:e2e:report after')?.[0];
     expect(match, 'must match the whole longer alternative, never stop at the shorter "npm run test:e2e" prefix').toBe('npm run test:e2e:report');
+  });
+  // #821: the same #806 collision, but joined by a hyphen or dot rather than a colon — `nestedRefs` above
+  // already recognises `.`/`-` inside a script name (`[\w:.-]`), so the lookahead must reject a name character
+  // from that same class, not only `[\w:]`, or a future hyphen/dot-joined sibling reopens the collision #806
+  // closed for colon-joined ones. Both separators are covered — `[\w:.-]` treats them identically, but a test
+  // proving only one of them would prove less than this describe block's own name claims.
+  it.each([
+    ['hyphen', 'test:e2e-visual'],
+    ['dot', 'test:e2e.visual'],
+  ])('a sibling script that only shares a recognised command\'s name as a prefix, joined by a %s, is not falsely recognised (#821)', (_sep, name) => {
+    const scratch = { ...pkgScripts, [name]: 'node scripts/visual-report.mjs' };
+    expect(runsPlaywright(scratch, name), 'this script never runs playwright itself').toBe(false);
+    expect(browserCommandRegex(scratch).test(`npm run ${name}`),
+      'the recognised "npm run test:e2e" must not substring-match inside this unrelated, longer sibling name').toBe(false);
+  });
+  // pr-test-analyzer review of the #821 fix: the existing #806-review "harder" case above (a sibling that DOES
+  // run playwright, matched via its own longer alternative) is colon-joined, so it never exercised the part of
+  // the character class #821 actually widened — the boundary character there (`:`) was already excluded by the
+  // pre-#821 `[\w:]`. A regression narrowing the lookahead back to `[\w:]` would still pass that test undetected.
+  it.each([
+    ['hyphen', 'test:e2e-report'],
+    ['dot', 'test:e2e.report'],
+  ])('a sibling that also runs playwright matches via its own longer alternative, joined by a %s, not by a shorter one substring-matching into it (#821)', (_sep, name) => {
+    const scratch = { ...pkgScripts, [name]: 'playwright test --reporter=json' };
+    expect(runsPlaywright(scratch, name), 'this sibling does run playwright, under its own name').toBe(true);
+    const match = browserCommandRegex(scratch).exec(`before npm run ${name} after`)?.[0];
+    expect(match, 'must match the whole longer alternative, never stop at the shorter "npm run test:e2e" prefix').toBe(`npm run ${name}`);
   });
 
   it("the browser-command regex derives its spellings from package.json, not a hand-enumerated list (#762)", () => {
