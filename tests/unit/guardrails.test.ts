@@ -3387,25 +3387,73 @@ describe('the one-way dependency from src/game/ to src/ui/ (#557, #325 stage 1)'
 describe('every registered topic stays silent on wordQ\'s #515 collision warning (#766)', () => {
   // Deterministic RNG (mulberry32) — the same generator curriculum.test.ts uses, kept local rather than
   // shared: this file has no other seeded-draw test to share it with, and importing a test helper across
-  // `tests/unit/*.test.ts` files for one four-line function is not worth the coupling.
+  // `tests/unit/*.test.ts` files for one four-line function is not worth the coupling. Pinned byte-identical
+  // to curriculum.test.ts's copy instead, below (#812) — so a fix to the mulberry32 body in one is caught if
+  // not mirrored in the other.
   function rng(seed: number) {
     return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
   }
   const SEEDS = [1, 2, 3, 4, 5];
   const DRAWS_PER_SEED = 100;
+  const DIFFICULTIES: Difficulty[] = [1, 2, 3];
+
+  // #812: seeded by the topic's own index rather than `topic.id.length` — up to 17 topics share an
+  // `id.length` (every 8-character id, say), which had them all draw from the same 5 raw seed values rather
+  // than 5 independently-chosen streams per topic. The index is unique per topic by construction. Shared with
+  // the regression test below it, rather than inlined in the draw loop only, so a reversion back to
+  // `topic.id.length` shows up there too instead of only in a loop no assertion reads the seed of.
+  const seedFor = (topicIndex: number, d: Difficulty, seed: number): number => topicIndex * 100000 + d * 1000 + seed;
 
   it('draws every topic at every difficulty over five seeds with zero wordQ warnings', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    for (const topic of TOPICS) {
-      for (const d of [1, 2, 3] as Difficulty[]) {
-        for (const seed of SEEDS) {
-          const r = rng(topic.id.length * 100000 + d * 1000 + seed);
-          for (let i = 0; i < DRAWS_PER_SEED; i++) topic.gen(d, r);
+    try {
+      for (const [i, topic] of TOPICS.entries()) {
+        for (const d of DIFFICULTIES) {
+          for (const seed of SEEDS) {
+            const r = rng(seedFor(i, d, seed));
+            for (let draw = 0; draw < DRAWS_PER_SEED; draw++) topic.gen(d, r);
+          }
         }
       }
+      expect(warn, "a live generator tripped wordQ's #515 collision warning — #766 exists to make this red, "
+        + "not a console line one session happens to be watching when it fires").not.toHaveBeenCalled();
+    } finally {
+      // #812: in a `finally`, not after the `expect`, so a throw from a future generator (or a failed
+      // assertion) can't leave `console.warn` mocked as a no-op for the rest of this file's run.
+      warn.mockRestore();
     }
-    expect(warn, "a live generator tripped wordQ's #515 collision warning — #766 exists to make this red, "
-      + "not a console line one session happens to be watching when it fires").not.toHaveBeenCalled();
-    warn.mockRestore();
+  });
+
+  // #812 (pr-test-analyzer review): the id.length-keyed seed this replaced was a real collision, not a
+  // hypothetical one — the live registry has several groups of topics sharing an id.length (15 share
+  // length 11 today). Proves the replacement directly against that registry rather than a fake: two topics
+  // whose ids happen to be the same length must still get different seeds at the same (difficulty, seed).
+  it('topics sharing an id.length still draw from independent seed streams (#812)', () => {
+    const byLen = new Map<number, number[]>();
+    TOPICS.forEach((t, i) => byLen.set(t.id.length, [...(byLen.get(t.id.length) ?? []), i]));
+    const colliding = [...byLen.values()].find((idxs) => idxs.length > 1);
+    expect(colliding, 'expected the registry to contain an id.length shared by 2+ topics — if this ever stops '
+      + 'holding, the bug this test regresses has nothing left to prove itself against').toBeDefined();
+    const seedsAtDifficulty1Seed1 = colliding!.map((i) => seedFor(i, 1, 1));
+    expect(new Set(seedsAtDifficulty1Seed1).size, 'same-length-id topics must not share a seed').toBe(seedsAtDifficulty1Seed1.length);
+  });
+
+  // #812: guards the "kept local rather than shared" decision above — without this, the mulberry32 body here
+  // and curriculum.test.ts's copy could drift apart silently, since nothing else compares them. Anchored on
+  // the `return () => { ... }` line itself, not the leading `function rng(seed: number) {` line, since the
+  // two copies sit at different nesting depths (this one inside a `describe`, curriculum.test.ts's at module
+  // scope) and so differ in indentation — trimmed, so that difference does not fail the pin for the wrong
+  // reason while a real drift in the arithmetic still would.
+  it('the mulberry32 rng() here stays byte-identical to curriculum.test.ts\'s copy (#812)', () => {
+    const here = readFileSync(new URL('./guardrails.test.ts', import.meta.url), 'utf8');
+    const there = readFileSync(new URL('./curriculum.test.ts', import.meta.url), 'utf8');
+    const body = (text: string, label: string) => {
+      const at = text.indexOf('return () => { seed |= 0;');
+      expect(at, `${label} must still declare the mulberry32 rng() body`).toBeGreaterThan(-1);
+      const end = text.indexOf('\n', at);
+      expect(end, `${label}'s rng() body must fit on one line`).toBeGreaterThan(at);
+      return text.slice(at, end).trim();
+    };
+    expect(body(here, 'guardrails.test.ts')).toBe(body(there, 'curriculum.test.ts'));
   });
 });
