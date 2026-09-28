@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { Session, repeatKey, starsForAccuracy, type SessionEvents } from '../../src/game/session';
+import { Session, repeatKey, starsForAccuracy, type DeckItem, type SessionEvents } from '../../src/game/session';
 import { TOPICS, YEARS, topicById, topicsFor, type Question, type Topic } from '../../src/curriculum';
 
 function rng(seed: number) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -338,6 +338,209 @@ describe('sprint session (60-second time attack)', () => {
     const s = new Session({ mode: 'mission', year: Y1, topic: topicById('y1-add')!, rng: rng(13) }, ev);
     s.start(); s.tick(99_999);
     expect(s.ended).toBe(false); expect(ev.onTime).not.toHaveBeenCalled();
+  });
+});
+
+describe('deck replay and misses (#878)', () => {
+  const deckTopic = topicById('y1-add')!;
+  /** `n` distinct questions (by `repeatKey`) from `deckTopic`, pre-generated the way a "Fix my mistakes" deck
+   *  would be — never re-rolled or regenerated once play starts. */
+  const buildDeck = (n: number, seed: number): DeckItem[] => {
+    const gen = rng(seed); const seen = new Set<string>(); const deck: DeckItem[] = [];
+    while (deck.length < n) {
+      const q = deckTopic.gen(1, gen); const key = repeatKey(q);
+      if (seen.has(key)) continue;
+      seen.add(key); deck.push({ topic: deckTopic, q });
+    }
+    return deck;
+  };
+  it('a deck of 3 asks exactly those 3 prompts, in order, then ends', () => {
+    const deck = buildDeck(3, 900); const ev = events();
+    const s = new Session({ mode: 'mission', year: Y1, deck, rng: rng(901) }, ev);
+    s.start();
+    for (const item of deck) { expect(s.current).toBe(item.q); expect(s.hit(item.q.answer)).toBe('correct'); s.advance(); }
+    expect(ev.onQuestion.mock.calls.map((c: any[]) => c[0])).toEqual(deck.map(d => d.q));
+    expect(ev.onStageClear, 'a deck flattens the mode\'s own staging').not.toHaveBeenCalled();
+    expect(ev.onEnd).toHaveBeenCalledTimes(1);
+    const r = ev.onEnd.mock.calls[0][0];
+    expect(r.won).toBe(true); expect(r.questions).toBe(3);
+  });
+  it('a deck works in a staged mode (mission) and an unstaged one (sprint) alike', () => {
+    for (const mode of ['mission', 'sprint'] as const) {
+      const deck = buildDeck(2, 910); const ev = events();
+      const s = new Session({ mode, year: Y1, deck, rng: rng(911) }, ev);
+      s.start();
+      expect(s.hit(deck[0].q.answer)).toBe('correct'); s.advance();
+      expect(s.hit(deck[1].q.answer)).toBe('correct'); s.advance();
+      expect(ev.onEnd, mode).toHaveBeenCalledTimes(1);
+      expect(ev.onEnd.mock.calls[0][0].won, mode).toBe(true);
+    }
+  });
+  it('with no deck, every existing session test passes unchanged', () => {
+    // #878's own acceptance criterion — asserted by the fact that every other test in this file constructs a
+    // Session with no `deck` at all and still passes; this line just says so where the deck tests live.
+    const ev = events();
+    const s = new Session({ mode: 'mission', year: Y1, topic: deckTopic, rng: rng(920) }, ev);
+    s.start();
+    expect(s.o.deck).toBeUndefined();
+  });
+  it('a wrong slice records the picked label, a fall records null', () => {
+    const deck = buildDeck(2, 930); const ev = events();
+    const s = new Session({ mode: 'mission', year: Y1, deck, rng: rng(931) }, ev);
+    s.start();
+    const wrong = deck[0].q.options.find(o => o !== deck[0].q.answer)!;
+    expect(s.hit(wrong)).toBe('wrong'); s.advance();
+    s.fall(deck[1].q.answer); s.advance();
+    const r = ev.onEnd.mock.calls[0][0];
+    expect(r.misses).toEqual([
+      { topic: deckTopic.id, q: deck[0].q, picked: wrong },
+      { topic: deckTopic.id, q: deck[1].q, picked: null },
+    ]);
+  });
+  it('a card missed twice keeps only its latest miss, moved to the end', () => {
+    const [a, b] = buildDeck(2, 940);
+    const deck = [a, b, a]; const ev = events();
+    const s = new Session({ mode: 'sprint', year: Y1, deck, rng: rng(941) }, ev);
+    s.start();
+    const wrongA = a.q.options.find(o => o !== a.q.answer)!;
+    expect(s.hit(wrongA)).toBe('wrong'); s.advance();              // a missed, picked recorded
+    s.fall(b.q.answer); s.advance();                               // b missed, a fall
+    s.fall(a.q.answer); s.advance();                                // a missed again, this time a fall
+    const r = ev.onEnd.mock.calls[0][0];
+    expect(r.misses, 'one entry for a, holding its latest miss, newest last').toEqual([
+      { topic: deckTopic.id, q: b.q, picked: null },
+      { topic: deckTopic.id, q: a.q, picked: null },
+    ]);
+  });
+  it('25 distinct misses keep the latest 20, capped at MISSES_CAP', () => {
+    const deck = buildDeck(25, 950); const ev = events();
+    const s = new Session({ mode: 'sprint', year: Y1, deck, rng: rng(951) }, ev);
+    s.start();
+    for (const item of deck) { const wrong = item.q.options.find(o => o !== item.q.answer)!; expect(s.hit(wrong)).toBe('wrong'); s.advance(); }
+    const r = ev.onEnd.mock.calls[0][0];
+    expect(r.misses).toHaveLength(20);
+    expect(r.misses.map((m: any) => m.q)).toEqual(deck.slice(5).map(d => d.q));
+  });
+  it('a deck session ends won: false when lives run out before the deck is exhausted', () => {
+    const deck = buildDeck(5, 960); const ev = events();
+    const s = new Session({ mode: 'mission', year: Y1, deck, rng: rng(961) }, ev);   // Y1: 3 lives, not gentle
+    s.start();
+    const wrongOf = (i: number) => deck[i].q.options.find(o => o !== deck[i].q.answer)!;
+    for (let i = 0; i < Y1.lives; i++) { expect(s.hit(wrongOf(i))).toBe('wrong'); s.advance(); }
+    expect(s.lives).toBe(0); expect(s.ended).toBe(true);
+    expect(ev.onQuestion, 'the deck stops being served the moment lives hit zero').toHaveBeenCalledTimes(Y1.lives);
+    const r = ev.onEnd.mock.calls[0][0];
+    expect(r.won).toBe(false);
+    expect(r.misses).toEqual(deck.slice(0, Y1.lives).map((d, i) => ({ topic: deckTopic.id, q: d.q, picked: wrongOf(i) })));
+  });
+  it('onCommit never fires for a deck session, even in a staged mode with a single stage', () => {
+    // #878 review (silent-failure-hunter, pr-test-analyzer): a deck never moves `stage`/`index`, so
+    // `maybeCommitFinalStage()` must not fire its staged-mission preview through a deck run.
+    const deck = buildDeck(3, 970); const ev = events(); ev.onCommit = vi.fn();
+    const s = new Session({ mode: 'mission', year: Y1, deck, stages: 1, rng: rng(971) }, ev);
+    s.start();
+    for (const item of deck) { expect(s.hit(item.q.answer)).toBe('correct'); s.advance(); }
+    expect(ev.onCommit).not.toHaveBeenCalled();
+    expect(ev.onEnd).toHaveBeenCalledTimes(1);
+    expect(ev.onEnd.mock.calls[0][0].won).toBe(true);
+  });
+  it('a sequence question inside a deck steps letter by letter like any other', () => {
+    const seqTopic = topicById('y1-sentence')!;
+    const gen = rng(980);
+    let q = seqTopic.gen(1, gen);
+    while (!q.sequence) q = seqTopic.gen(1, gen);   // y1-sentence sequences from d1, but don't assume it forever
+    const deck: DeckItem[] = [{ topic: seqTopic, q }];
+    const ev = events();
+    const s = new Session({ mode: 'mission', year: Y1, deck, rng: rng(981) }, ev);
+    s.start();
+    expect(s.current!.sequence).toBeDefined();
+    expect(solve(s)).toBe('correct');
+    s.advance();
+    expect(ev.onEnd).toHaveBeenCalledTimes(1);
+    expect(ev.onEnd.mock.calls[0][0]).toMatchObject({ won: true, correct: 1, questions: 1 });
+  });
+  /**
+   * #878 review round 1, blocking finding 1: the previous "onCommit never fires for a deck session" test
+   * passes even with `this.o.deck ||` deleted from `maybeCommitFinalStage()`'s guard, because every real
+   * `YearInfo` has `perStage >= 5` — `this.index + 1 < this.perStage` (`0 + 1 < 6`) already short-circuits it
+   * for a deck session, which never advances `index`. This test reaches the branch the guard actually exists
+   * for, with a `YearInfo` shaped so `index + 1 >= perStage` — the guard's own removal turns this red.
+   */
+  it('the o.deck guard on maybeCommitFinalStage is load-bearing, not incidental (#878 review)', () => {
+    const oneQuestionYear = { ...Y1, perStage: 1 };
+    const deck = buildDeck(3, 990); const ev = events(); ev.onCommit = vi.fn();
+    const s = new Session({ mode: 'mission', year: oneQuestionYear, deck, stages: 1, rng: rng(991) }, ev);
+    s.start();
+    expect(s.hit(deck[0].q.answer)).toBe('correct');
+    expect(ev.onCommit, 'perStage:1 makes index+1 >= perStage true after the first question — only the explicit o.deck guard keeps this silent').not.toHaveBeenCalled();
+  });
+  /**
+   * #878 review round 2, blocking finding: every deck test built its deck from a single `Topic`
+   * (`deckTopic`), so nothing distinguished `nextDeckQuestion()` reading each item's own `topic` from a bug
+   * that pinned every item to the first one's. "Fix my mistakes" (#930) and "Recent slips" (#938) — the two
+   * features #878 exists for — are, by their own description, decks spanning many topics, and `Miss.topic`
+   * is a field #878 itself introduces, so a mis-attribution here would silently corrupt it.
+   */
+  it('each deck item is served under its own topic, not the first item\'s (#878 review)', () => {
+    const topicA = topicById('y1-add')!; const topicB = topicById('y1-sub')!;
+    const qA = topicA.gen(1, rng(1000)); const qB = topicB.gen(1, rng(1001));
+    const deck: DeckItem[] = [{ topic: topicA, q: qA }, { topic: topicB, q: qB }];
+    const ev = events();
+    const s = new Session({ mode: 'sprint', year: Y1, deck, rng: rng(1002) }, ev);
+    s.start();
+    expect(s.currentTopic).toBe(topicA);
+    const wrongA = qA.options.find(o => o !== qA.answer)!;
+    expect(s.hit(wrongA)).toBe('wrong'); s.advance();
+    expect(s.currentTopic, 'the second item keeps its own topic, not the first item\'s').toBe(topicB);
+    const wrongB = qB.options.find(o => o !== qB.answer)!;
+    expect(s.hit(wrongB)).toBe('wrong'); s.advance();
+    const r = ev.onEnd.mock.calls[0][0];
+    expect(r.misses).toEqual([
+      { topic: topicA.id, q: qA, picked: wrongA },
+      { topic: topicB.id, q: qB, picked: wrongB },
+    ]);
+  });
+  /**
+   * #878 review round 3, blocking finding: every mission-mode deck test used 2–5 items against `Y1.perStage`
+   * (6), so `advance()`'s `this.o.deck ||` guard — the sibling of `maybeCommitFinalStage()`'s round-1 guard —
+   * was never exercised past `this.index < this.perStage`. A deck at least as long as `perStage`, in a staged
+   * mode, is exactly what "Fix my mistakes" (#930) and "Recent slips" (#938) need and what the PR's own doc
+   * comment claims works ("a deck works identically in a staged mode... and an unstaged one").
+   */
+  it('a mission-mode deck at least as long as perStage still flattens fully (#878 review)', () => {
+    const deck = buildDeck(Y1.perStage + 2, 1010); const ev = events();
+    const s = new Session({ mode: 'mission', year: Y1, deck, rng: rng(1011) }, ev);
+    s.start();
+    for (const item of deck) { expect(s.current).toBe(item.q); expect(s.hit(item.q.answer)).toBe('correct'); s.advance(); }
+    expect(ev.onStageClear, 'a deck never triggers a stage clear, however long').not.toHaveBeenCalled();
+    expect(ev.onQuestion.mock.calls.map((c: any[]) => c[0])).toEqual(deck.map(d => d.q));
+    expect(ev.onEnd).toHaveBeenCalledTimes(1);
+    const r = ev.onEnd.mock.calls[0][0];
+    expect(r.won).toBe(true); expect(r.questions).toBe(deck.length);
+  });
+});
+
+/**
+ * #878 review round 1, blocking finding 2: every `.misses` assertion added by #878 lived inside
+ * `describe('deck replay and misses (#878)')`, so a plain generated session — mission, sprint, endless, boss,
+ * the common case, not the new one — was never checked to populate `misses` on its own `SessionResult`.
+ */
+describe('misses without a deck (#878 review)', () => {
+  it('a plain generated session (no deck) also records misses', () => {
+    const ev = events();
+    const s = new Session({ mode: 'sprint', year: Y1, topic: topicById('y1-add')!, rng: rng(996) }, ev);
+    s.start();
+    const q1 = s.current!;
+    const wrong = q1.options.find(o => o !== q1.answer)!;
+    expect(s.hit(wrong)).toBe('wrong'); s.advance();
+    const q2 = s.current!;
+    s.fall(q2.answer); s.advance();
+    s.tick(60_000);
+    const r = ev.onEnd.mock.calls[0][0];
+    expect(r.misses).toEqual([
+      { topic: 'y1-add', q: q1, picked: wrong },
+      { topic: 'y1-add', q: q2, picked: null },
+    ]);
   });
 });
 
