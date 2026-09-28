@@ -1415,6 +1415,132 @@ test.describe('Sky Ninja Academy', () => {
     expect(await page.evaluate(() => window.__sna.state().trail)).toEqual(water.trail);
   });
 
+  // #894: Daily Dojo rows, locked stickers and shop item cards have no action of their own for a pre-reader
+  // to trigger, so tapping them just reads the card aloud. The title/blurb/fraction are read back from the
+  // DOM rather than hardcoded, so these stay correct whichever Daily Dojo challenges the seeded date drew.
+  test('menu tap-to-speak (#894): a Daily Dojo row reads its challenge and progress aloud', async ({ page }) => {
+    await captureSpeech(page);
+    await seedPlayer(page);
+    const row = page.locator('.dojo-item').first();
+    const title = await row.locator('b').textContent();
+    const [p, goal] = (await row.locator('.prog').textContent())!.split('/');   // undone: "p/goal"
+    await row.click();
+    await expect.poll(() => page.evaluate(() => window.__spoken ?? []))
+      .toEqual(expect.arrayContaining([`${title}. ${p} of ${goal} done.`]));
+  });
+
+  test('menu tap-to-speak (#894): a locked coin sticker reads its cost aloud', async ({ page }) => {
+    await captureSpeech(page);
+    await seedPlayer(page, 'volt', 'Ada', { coins: 10 });   // below STICKER_COST[0] (30): the first sticker stays locked
+    await page.click('#rewards');
+    const card = page.locator('.sticker').first();
+    await expect(card).not.toHaveClass(/\bgot\b/);
+    await card.click();
+    await expect.poll(() => page.evaluate(() => window.__spoken ?? []))
+      .toEqual(expect.arrayContaining(['This sticker costs 30 coins.']));
+  });
+
+  test('menu tap-to-speak (#894): a locked achievement sticker reads the achievement, not a cost', async ({ page }) => {
+    await captureSpeech(page);
+    // Same seed as the "#163: a locked achievement sticker" test above: 3 of 5 topics `terra` needs.
+    await seedPlayer(page, 'volt', 'Ada', {
+      progress: {
+        'r-subitise': { stars: 1, best: 5, plays: 1 },
+        'r-compare': { stars: 1, best: 5, plays: 1 },
+        'r-onemore': { stars: 1, best: 5, plays: 1 },
+      },
+    });
+    await page.click('#rewards');
+    const card = page.locator('.sticker').filter({ hasText: 'Star 5 topics' });
+    await expect(card).not.toHaveClass(/\bgot\b/);
+    await card.click();
+    await expect.poll(() => page.evaluate(() => window.__spoken ?? []))
+      .toEqual(expect.arrayContaining(['Star 5 topics']));
+  });
+
+  test('menu tap-to-speak (#894): a shop item card speaks its name and blurb; tapping Buy speaks only the purchase line', async ({ page }) => {
+    await captureSpeech(page);
+    await seedPlayer(page, 'volt', 'Ada', { coins: 200, spent: 0 });   // trail-gold's price, exactly
+    await page.click('#rewards'); await page.click('#shop');
+    const card = page.locator('.item[data-item="trail-gold"]');
+    const name = await card.locator('b').textContent();
+    const blurb = await card.locator('small').textContent();
+    const cardLine = `${name}. ${blurb}`;
+    await card.click();
+    await expect.poll(() => page.evaluate(() => window.__spoken ?? []))
+      .toEqual(expect.arrayContaining([cardLine]));
+    await card.locator('[data-buy]').click();                     // the button inside the same card
+    await expect.poll(() => page.evaluate(() => window.__spoken ?? []))
+      .toEqual(expect.arrayContaining([`You bought the ${name}!`]));
+    const spoken = (await page.evaluate(() => window.__spoken))!;
+    expect(spoken.filter(l => l === cardLine), 'the Buy tap must not also speak the card a second time').toHaveLength(1);
+  });
+
+  // pr-test-analyzer review of #894: the pure-function unit test covers the "Done!" boundary with a hand-built
+  // Challenge, but nothing drove a real completed row through the actual DOM/progress binding — seeded for
+  // both today and tomorrow (`dailyChallenges` is a pure function of the date string) so the page's own clock
+  // decides which one applies, the same way the #518 Memory Match test above seeds across a midnight boundary.
+  test('menu tap-to-speak (#894): a completed Daily Dojo row reads "Done!", not a fraction', async ({ page }) => {
+    await captureSpeech(page);
+    const dojoByDate: Record<string, unknown> = {};
+    for (const offset of [0, 1]) {
+      const dt = new Date(); dt.setUTCDate(dt.getUTCDate() + offset);
+      const date = dt.toISOString().slice(0, 10);
+      const cs = dailyChallenges(date);
+      dojoByDate[date] = {
+        date, progress: Object.fromEntries(cs.map(c => [c.id, c.goal])), done: cs.map(c => c.id),
+        setDone: true, streak: { last: date, days: 1 }, total: cs.length,
+      };
+    }
+    await page.addInitScript(({ save, dojoByDate }) => {
+      if (localStorage.getItem('sna:v1')) return;
+      const d = JSON.parse(save) as Record<string, unknown>;
+      d.dojo = dojoByDate[new Date().toISOString().slice(0, 10)];
+      localStorage.setItem('sna:v1', JSON.stringify(d));
+    }, { save: JSON.stringify({ v: 1, name: 'Ada', avatar: 'volt' }), dojoByDate });
+    await page.goto('/');
+    await expect(page.locator('.home')).toBeVisible();
+    const row = page.locator('.dojo-item.done').first();
+    const title = await row.locator('b').textContent();
+    await row.click();
+    await expect.poll(() => page.evaluate(() => window.__spoken ?? []))
+      .toEqual(expect.arrayContaining([`${title}. Done!`]));
+  });
+
+  // pr-test-analyzer review of #894: `.sticker:not(.got)` is never given a listener, so an earned sticker
+  // should stay silent — asserted here rather than only implied by the locked-sticker tests above.
+  test('menu tap-to-speak (#894): an already-earned sticker stays silent on tap', async ({ page }) => {
+    await captureSpeech(page);
+    await seedPlayer(page, 'volt', 'Ada', { stickers: ['volt'] });
+    await page.click('#rewards');
+    const card = page.locator('.sticker.got').first();
+    await expect(card).toBeVisible();
+    await card.click();
+    expect(await page.evaluate(() => window.__spoken ?? []), 'an earned sticker has no listener at all').toEqual([]);
+  });
+
+  // pr-test-analyzer review of #894: the "Using ✓" pill is a <span>, not a <button>, so the card handler's
+  // `closest('button')` guard does not exclude it — a tap there speaks the card, deliberately, since the pill
+  // performs no action of its own. The neighbouring "Use" button on the still-owned default trail DOES perform
+  // an action (equip), and that path was covered only by code-reading before this test.
+  test('menu tap-to-speak (#894): the equipped pill still speaks the card; the "Use" button does not', async ({ page }) => {
+    await captureSpeech(page);
+    await seedPlayer(page, 'volt', 'Ada', { coins: 200, spent: 0, owned: ['trail-gold'], equipped: { trail: 'trail-gold' } });
+    await page.click('#rewards'); await page.click('#shop');
+    const goldCard = page.locator('.item[data-item="trail-gold"]');
+    const goldLine = `${await goldCard.locator('b').textContent()}. ${await goldCard.locator('small').textContent()}`;
+    await goldCard.locator('.pill.on').click();
+    await expect.poll(() => page.evaluate(() => window.__spoken ?? []))
+      .toEqual(expect.arrayContaining([goldLine]));
+
+    const elementCard = page.locator('.item[data-item="trail-element"]');
+    await expect(elementCard.locator('[data-equip]'), 'owned for free, not equipped — the "Use" button, not the pill').toBeVisible();
+    const before = (await page.evaluate(() => window.__spoken ?? [])).length;
+    await elementCard.locator('[data-equip]').click();
+    await expect(elementCard.locator('.pill.on'), 'the equip itself must still have worked').toBeVisible();
+    expect(await page.evaluate(() => window.__spoken ?? []), 'the Use button must not also speak the card').toHaveLength(before);
+  });
+
   test('reception is gentle: missed bubbles re-ask without losing lives', async ({ page }) => {
     await seedPlayer(page);
     await startTopic(page, 'reception', 'r-onemore');
