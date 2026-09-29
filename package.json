@@ -11,6 +11,7 @@
     "sketch": "vite -c vite.sketchbook.config.ts --host",
     "sketch:shot": "node scripts/sketch-shot.mjs",
     "lint": "eslint src",
+    "hooks": "git config core.hooksPath .githooks",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:e2e:smoke": "playwright test --project=mobile --grep @smoke",
