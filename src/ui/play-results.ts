@@ -2,7 +2,7 @@
 // callbacks into play-session.ts): the DOM build, the certificate button and the closing speech, wired to
 // the screen instance through one deps object rather than living in playScreen()'s own closure.
 import { praiseLine, senseiLine, SENSEI, type Avatar } from '../avatars';
-import type { SessionResult } from '../game/session';
+import type { Miss, SessionResult } from '../game/session';
 import { scaled } from '../game/speed';   // #32: test-only time compression
 import { say, sfx } from '../audio';
 import { topicsFor, type Topic, type YearInfo } from '../curriculum';
@@ -15,6 +15,10 @@ import { stickersHTML } from './screen';
 import { deliverCertificate, drawCertificate } from './certificate';
 import type { ResultPayout } from './play-session';
 
+/** The payout a practice ("Fix my mistakes", #930) run commits — nothing at all: no dojo outcome was ever
+ *  computed, so `dojo: null` says that outright rather than a placeholder value pretending one exists. */
+export const PRACTICE_PAYOUT: ResultPayout = { newBest: false, dojo: null, fresh: [], streak: 0, cert: null, certSaved: false, dojoSaved: false };
+
 /** Everything the results overlay needs from the screen around it. Function-valued where the screen owns the state. */
 export interface ResultsScreenDeps {
   training: boolean;
@@ -26,6 +30,8 @@ export interface ResultsScreenDeps {
   toast: (text: string, cls?: string, ms?: number) => void;
   replay: () => void; goHome: () => void; cleanup: () => void;
   next: (t: Topic) => void;                 // #929: start a mission on a different topic ("Next topic →")
+  fix: (misses: Miss[]) => void;            // #930: start a "Fix my mistakes" round on this run's own misses
+  practice: boolean;                        // #930: this run IS a fix round — no action offered, "Mistakes fixed!" heading, 0 coins shown
 }
 
 /**
@@ -53,7 +59,7 @@ function nextUnstarredTopic(year: YearInfo, topic: Topic | undefined): Topic | n
  * #940, #897), so today it is always `[]` and the overlay renders exactly as it did before this split.
  */
 export function createResultsScreen(deps: ResultsScreenDeps) {
-  const { training, year, topic, av, name, els, hold, later, toast, replay, goHome, cleanup, next } = deps;
+  const { training, year, topic, av, name, els, hold, later, toast, replay, goHome, cleanup, next, fix, practice } = deps;
   return function showResults(r: SessionResult, payout: ResultPayout, candidates: ResultCandidate[] = []) {
     // Terminal, and `beats: false` because of it (PR #474 review, B1): the game is over — syncPaused() also
     // reads session.ended, so nothing here can undo the pause — and the beats below (the sticker jingle, the
@@ -61,14 +67,14 @@ export function createResultsScreen(deps: ResultsScreenDeps) {
     hold(true, false);
     const { newBest, dojo, fresh, streak, cert, certSaved, dojoSaved } = payout;
     const stickerHTML = dojoSaved ? stickersHTML(fresh) : '';   // #518: no keepsake for a refused write, same shape as certSaved
-    if (dojoSaved && (fresh.length || dojo.completed.length)) later(() => sfx.stage(), scaled(600));   // #138
+    if (dojoSaved && (fresh.length || dojo!.completed.length)) later(() => sfx.stage(), scaled(600));   // #138
     const medal = resultMedal(r);
     // #522: a generator throw ends the session through the same `won: false` path as a genuine loss, but it
     // is not one — `r.incomplete` withholds the win/loss framing (never a certificate either: `certInfo`
     // already requires `r.won`, which an incomplete session never has) and says plainly what happened instead,
     // mirroring `duel.ts`'s identical `r.incomplete` handling for an aborted match.
     const headline = resultHeadline(r, { training, newBest, name, senseiLine: () => senseiLine(r.won, name), praiseLine: () => praiseLine(av, name) });
-    const heading = r.incomplete ? 'Session ended early' : resultHeading(r.mode, { won: r.won, training });   // from the mode table (mission distinguishes a Sensei-training win)
+    const heading = r.incomplete ? 'Session ended early' : practice ? 'Mistakes fixed!' : resultHeading(r.mode, { won: r.won, training });   // from the mode table (mission distinguishes a Sensei-training win)
     const speaker = training ? SENSEI : av;   // Sensei closes a training session; the child's own ninja closes everything else
     say(headline);
     const lines = resultsLines(candidates);   // #896: belt > island > trophy > best > rest, at most two
@@ -78,22 +84,21 @@ export function createResultsScreen(deps: ResultsScreenDeps) {
     // the child as a keepsake the album does not actually hold. `cert` itself stays what was earned regardless:
     // the `certificate()` hook below still answers that, same as before #470.
     const earned = certSaved ? cert : null;
-    // #929: retry/fix have no caller yet (misses fixed at 0, no lostAtStage), so only `next` can come back.
-    // #929 review (silent-failure-hunter): the day #930/#931 pass a real `misses`/`lostAtStage` in, this line
-    // below only handling `'next'` would make `resultsAction()` correctly decide "fix"/"retry" and the row
-    // silently show no action at all — widen this alongside whichever of those two lands first.
-    const action = resultsAction({ mode: r.mode, training, won: r.won, misses: 0, next: nextUnstarredTopic(year, topic) });
+    // #930: a fix round's own results never offer an action — `retry`/`lostAtStage` still has no caller, and a
+    // fix round passing its own real misses would offer to fix its fix round.
+    const action = practice ? null : resultsAction({ mode: r.mode, training, won: r.won, misses: r.misses.length, next: nextUnstarredTopic(year, topic) });
     els.overlay.hidden = false;
     els.overlay.innerHTML = resultsHTML({
       mode: r.mode, won: r.won, training, incomplete: r.incomplete, glow: speaker.glow, img: speaker.img, name: speaker.name,
       headline, medal, heading, starCount: r.stars, score: r.score, correct: r.correct, attempts: r.attempts,
-      bestCombo: r.bestCombo, coins: r.coins, newBest, streak, dojoRows: dojoSaved ? dojoRowsHTML(dojo) : '', stickerHTML, cert: !!earned,
+      bestCombo: r.bestCombo, coins: practice ? 0 : r.coins, newBest, streak, dojoRows: dojoSaved ? dojoRowsHTML(dojo!) : '', stickerHTML, cert: !!earned,
       resultLines: resultPillsHTML(lines),
-      action: action?.kind === 'next' ? { id: 'next-topic', label: 'Next topic →' } : undefined,
+      action: action?.kind === 'next' ? { id: 'next-topic', label: 'Next topic →' } : action?.kind === 'fix' ? { id: 'fix-mistakes', label: 'Fix my mistakes' } : undefined,
     });
     $('#again').addEventListener('click', () => { sfx.tap(); cleanup(); replay(); });
     $('#home').addEventListener('click', () => { sfx.tap(); cleanup(); goHome(); });
     if (action?.kind === 'next') $('#next-topic').addEventListener('click', () => { sfx.tap(); cleanup(); next(action.topic); });
+    if (action?.kind === 'fix') $('#fix-mistakes').addEventListener('click', () => { sfx.tap(); cleanup(); fix(r.misses); });
     if (earned) $('#cert').addEventListener('click', async () => {
       sfx.tap(); const b = $('#cert') as HTMLButtonElement; b.disabled = true;
       try {
