@@ -2385,21 +2385,14 @@ describe('a card\'s bubble width is derived from its options, never from its ans
    *
    * `r-build` d2's decoys are near-miss spellings of the answer too, the same structural reason `r-build`
    * d3 is already here — d2 only stayed off the list because a smaller `CVC` pool makes an overlap less
-   * likely at this seed and `DRAWS`, and #874 shrank it by four words (the wrongly-pictured entries).
-   *
-   * `y1-alien` (#982) is blind at every difficulty for a different structural reason: `ALIEN_REAL` and
-   * `ALIEN_FAKE` are disjoint, so any option set has a fixed count of real vs alien members — 1 real + 2/3
-   * alien at d1/d2 (only "real word" cards exist there), and either 1 real + 3 alien or 3 real + 1 alien at
-   * d3 (never both shapes for the same set, since the counts differ). The answer is always the set's unique
-   * minority-bank member, so a set can only ever recur with the one answer it was drawn with.
+   * likely at this seed and `DRAWS`, and #874 shrank it by four words (the wrongly-pictured entries). `y1-alien` (#982): see `topic-y1-alien.test.ts`.
    */
   const NO_REPEATED_SET = new Set([
     'r-order d1', 'r-order d2', 'r-order d3', 'r-share d2', 'r-share d3',
     'r-build d2', 'r-build d3', 'r-sentence d1', 'r-sentence d2', 'r-sentence d3',
     'y1-skip d1', 'y1-skip d2', 'y1-skip d3', 'y1-order d1', 'y1-order d2', 'y1-order d3',
     'y1-coins d3', 'y1-shapes d3', 'y1-plurals d1', 'y1-punct d1', 'y1-days d3',
-    'y1-sentence d1', 'y1-sentence d2', 'y1-sentence d3',
-    'y1-alien d1', 'y1-alien d2', 'y1-alien d3',
+    'y1-sentence d1', 'y1-sentence d2', 'y1-sentence d3', 'y1-alien d1', 'y1-alien d2', 'y1-alien d3',
     'y2-skip d1', 'y2-skip d2', 'y2-skip d3', 'y2-order d1', 'y2-order d2', 'y2-order d3',
     'y2-add d3', 'y2-tables d1', 'y2-line d2', 'y2-line d3',
     'y2-money d1', 'y2-money d2', 'y2-money d3', 'y2-time d1', 'y2-time d2', 'y2-time d3',

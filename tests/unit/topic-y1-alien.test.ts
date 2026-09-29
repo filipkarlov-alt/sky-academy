@@ -130,3 +130,10 @@ describe('y1-alien (#982): Real or Alien?, both banks hand-curated', () => {
     }
   });
 });
+
+// `y1-alien` is listed in `NO_REPEATED_SET` in `curriculum.test.ts` (#982): `ALIEN_REAL` and `ALIEN_FAKE` are
+// disjoint, so any option set has a fixed count of real vs alien members — 1 real + 2/3 alien at d1/d2 (only "real
+// word" cards exist there), and either 1 real + 3 alien or 3 real + 1 alien at d3 (never both shapes for the same
+// set, since the counts differ). The answer is always the set's unique minority-bank member, so a set can only ever
+// recur with the one answer it was drawn with. The comment lives here because `curriculum.test.ts` is frozen at its
+// length (#1388).
