@@ -37,6 +37,20 @@ describe('y1-alien (#982): Real or Alien?, both banks hand-curated', () => {
     for (const w of realWords) expect(AVOID.has(w.toLowerCase()), `"${w}" is denylisted (AVOID)`).toBe(false);
   });
 
+  /**
+   * Four review rounds on this PR each found a genuine real word or taught-alternative-spelling
+   * sound-alike in ALIEN_FAKE that GAP_WORDS/AVOID (curriculum vocabulary lists, not a dictionary)
+   * could not catch: 'yow' (real interjection), 'thob' (echoes thawb/thobe), 'zue'/'zew' (decode via
+   * taught ue/ew → /uː/ to "zoo"), 'yoe' (oe → /oʊ/ to "yo"), 'zow' (echoes "wow"/"zowie"), 'shund'
+   * (sh+u+n+d → "shunned"), 'zute' (split-digraph u_e → homophone of "zoot"). Each was swapped out in
+   * turn, but nothing stopped one of them being reinstated by a future edit — a hardcoded pin on the
+   * exact words already found is the cheap alternative the round-4 review asked for.
+   */
+  it('a previously-fixed real word/sound-alike never returns to ALIEN_FAKE (#982)', () => {
+    const RETIRED = ['yow', 'thob', 'zue', 'zew', 'yoe', 'zow', 'shund', 'zute'];
+    for (const w of RETIRED) expect(fakeWords, `"${w}" was already fixed out of ALIEN_FAKE once`).not.toContain(w);
+  });
+
   it('every bank word is 6 letters or fewer', () => {
     for (const w of [...realWords, ...fakeWords]) expect(w.length, `"${w}" is longer than 6 letters`).toBeLessThanOrEqual(6);
   });
