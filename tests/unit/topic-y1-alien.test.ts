@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { TOPICS } from '../../src/curriculum';
 import type { Difficulty } from '../../src/curriculum';
@@ -47,8 +48,34 @@ describe('y1-alien (#982): Real or Alien?, both banks hand-curated', () => {
    * exact words already found is the cheap alternative the round-4 review asked for.
    */
   it('a previously-fixed real word/sound-alike never returns to ALIEN_FAKE (#982)', () => {
-    const RETIRED = ['yow', 'thob', 'zue', 'zew', 'yoe', 'zow', 'shund', 'zute'];
+    const RETIRED = ['yow', 'thob', 'zue', 'zew', 'yoe', 'zow', 'shund', 'zute', 'zeak', 'chun', 'mulk', 'phum', 'zade'];
     for (const w of RETIRED) expect(fakeWords, `"${w}" was already fixed out of ALIEN_FAKE once`).not.toContain(w);
+  });
+
+  /**
+   * #982 review round 5: a `RETIRED` pin (round 4) only ever catches a word already found once — it cannot
+   * catch a *new* real word or taught-alternative-spelling sound-alike, which is exactly what 'zeak' (→
+   * "Zeke") was. Five review rounds have each found a different instance that `GAP_WORDS`/`AVOID` (curriculum
+   * vocabulary lists, not a dictionary or a phonics decoder) cannot catch. This pins the **whole bank**
+   * instead, the same method `curriculum.test.ts` already uses for Reception's gap spellings and the y1
+   * digraph bank: every entry in `fixtures/y1-alien-bank.txt` has been read once for this failure class, and
+   * an addition, removal or edit to either bank shows up as a diff a person reads, rather than waiting for a
+   * sixth round's eye.
+   */
+  it('every ALIEN_REAL/ALIEN_FAKE entry has been looked at for a real-word/sound-alike risk (#982)', () => {
+    const expected = readFileSync(new URL('./fixtures/y1-alien-bank.txt', import.meta.url), 'utf8')
+      .split('\n').map(l => l.trim()).filter(Boolean);
+    expect(expected.length, 'the fixture is empty or unreadable, which would make this rail vacuous').toBeGreaterThan(80);
+    const actual = [
+      ...ALIEN_REAL.map(([w, p]) => `REAL ${p} ${w}`),
+      ...ALIEN_FAKE.map(([w, p]) => `FAKE ${p} ${w}`),
+    ].sort();
+    const set = new Set(expected);
+    const added = actual.filter(l => !set.has(l));
+    const gone = expected.filter(l => !actual.includes(l));
+    expect(added, 'a new/changed bank entry has not been checked for a real-word/sound-alike risk — read it, '
+      + 'then update fixtures/y1-alien-bank.txt in the same commit').toEqual([]);
+    expect(gone, 'a bank entry the fixture expects is gone; if that was the intent, update the fixture').toEqual([]);
   });
 
   it('every bank word is 6 letters or fewer', () => {
