@@ -7,6 +7,7 @@ import { itemById } from '../../src/game/shop';
 import { dailyChallenges } from '../../src/game/dojo';
 import type { PlayHooks, MemoryHooks } from '../../src/ui/hooks';
 import { expectFitsViewport } from './viewport';
+import { CARD_TEXT_WIDTH_390, PROMPT_FS_PHONE, PROMPT_FS_SHORT, promptLines } from '../unit/helpers/card-budget';
 import { COMPACT_VARS, islandsHTML, mapLayout } from '../../src/ui/map-layout';
 /** A context with nothing stored: the 3-D setting at its default, `auto` — the opt-out from `THREE_OFF`. */
 const NO_STORED_STATE = { cookies: [], origins: [] };   // #380 review round 5, B1: the rail this repo already built for a screen that does not fit (#107, #109, #110)
@@ -4876,4 +4877,45 @@ test('y2-oddeven "Slice Them All": every target sliced in any order completes th
     expect(await page.evaluate((l) => window.__sna.arena!.hitLabel(l), label)).toBe(true);
   }
   await expect.poll(() => page.evaluate(() => window.__sna.session.score)).toBeGreaterThan(scoreBefore);
+});
+
+// #1051: the KS2 card holds a long prompt on a phone. The unit rule (`tests/unit/ks2-card-budget.test.ts`) measures
+// text with an advance table; this ties it to the real card — the width it assumes, and that three lines fit.
+test.describe('a KS2 word-problem card fits a phone (#1051)', () => {
+  const FOUR_LINE_PROMPT = 'Mia has 348 stickers and gives away 129 of them to her friends at school today?';   // 4 lines at both sizes
+  const THREE_LINE_PROMPT = 'Mia has 348 stickers and gives away 129 of them to her friends at school?';   // 3 lines at 28px and at 26px by `promptLines`
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript((fast) => { window.__SNA_FAST = fast; }, FAST);
+    await page.addInitScript(() => localStorage.setItem('sna:years', 'all'));
+  });
+
+  for (const h of [664, 600]) {
+    test(`the browser wraps a 3-line and a 4-line prompt as the unit rule says at 390×${h}, the page fits`, async ({ page }, info) => {
+      test.skip(info.project.name !== 'mobile', 'the 390px phone card; the desktop card is wider by design');
+      await page.setViewportSize({ width: 390, height: h });
+      await seedPlayer(page);
+      await startTopic(page, 'year3', 'y3-count');
+      const fs = h <= 640 ? PROMPT_FS_SHORT : PROMPT_FS_PHONE;
+      // The rendered line count: distinct line tops over a Range of the prompt's text. An auto-height card never
+      // scrolls, so this — the browser's own wrap — is what the unit rule's advance table is held against.
+      const render = (p: string) => page.evaluate(t => {
+        const el = document.querySelector('#prompt') as HTMLElement;
+        el.textContent = t;
+        const r = document.createRange(); r.selectNodeContents(el);
+        const tops = new Set([...r.getClientRects()].map(c => Math.round(c.top)));
+        return { lines: tops.size, w: el.getBoundingClientRect().width, fs: parseFloat(getComputedStyle(el).fontSize) };
+      }, p);
+      for (const [name, prompt, want] of [['3-line', THREE_LINE_PROMPT, 3], ['4-line', FOUR_LINE_PROMPT, 4]] as const) {
+        expect(promptLines(prompt, fs, CARD_TEXT_WIDTH_390), `${name} fixture, unit rule`).toBe(want);
+        const m = await render(prompt);
+        expect(m.lines, `${name} fixture: the browser wraps it to ${m.lines} lines`).toBe(want);
+        expect(m.fs).toBe(fs);
+        // 664 is the phone the constant is measured at; the short screen pads 4px less, so its prompt may only be wider
+        if (h > 640) expect(Math.abs(m.w - CARD_TEXT_WIDTH_390), `prompt inner width ${m.w}px vs CARD_TEXT_WIDTH_390`).toBeLessThanOrEqual(2);
+        else expect(m.w, `prompt inner width ${m.w}px vs CARD_TEXT_WIDTH_390`).toBeGreaterThanOrEqual(CARD_TEXT_WIDTH_390 - 2);
+      }
+      await render(THREE_LINE_PROMPT);
+      await expectFitsViewport(page, `KS2 card 390×${h}`);
+    });
+  }
 });
