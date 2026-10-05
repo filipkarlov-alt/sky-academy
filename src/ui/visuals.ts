@@ -3,6 +3,7 @@ import type { Visual } from '../curriculum';
 import { coinLabel, NOTES, isNote } from '../curriculum/util';
 import { esc } from './dom';
 import { barChartSVG } from './vis-axis-chart';
+import { geometrySVG } from './vis-geometry';
 
 /** `n` objects in rows of five; slots past `keep` are crossed out ("take away"); at least one full row of slots is always shown. */
 export function fiveFrames(n: number, emoji: string, keep = n): string {
@@ -57,15 +58,17 @@ function fractionHTML(v: Extract<Visual, { type: 'fraction' }>): string {
   }
   return `<div class="vis"><div class="bar">${Array.from({ length: parts }, (_, i) => `<i class="${i < shaded ? 'sh' : ''}"></i>`).join('')}</div></div>`;
 }
+/** Objects in five-frames; two groups with a plus or "or", or a take-away with the last |n2| crossed out. */
+function objectsHTML(v: Extract<Visual, { type: 'objects' }>): string {
+  // Objects sit in five-frames (rows of 5 slots, empty slots drawn faintly) so a child can count in fives (#54).
+  if (v.n2 === undefined) return `<div class="vis objs">${fiveFrames(v.n, v.emoji)}</div>`;
+  if (v.n2 < 0) return `<div class="vis objs">${fiveFrames(v.n, v.emoji, v.n + v.n2)}</div>`;   // take away: cross out |n2| objects
+  return `<div class="vis objs two"><div class="grp">${fiveFrames(v.n, v.emoji)}</div><div class="plus">${v.emoji2 && v.emoji2 !== v.emoji ? 'or' : '+'}</div><div class="grp">${fiveFrames(v.n2, v.emoji2 ?? v.emoji)}</div></div>`;
+}
 export function renderVisual(v: Visual | undefined): string {
   if (!v) return '';
   switch (v.type) {
-    case 'objects': {
-      // Objects sit in five-frames (rows of 5 slots, empty slots drawn faintly) so a child can count in fives (#54).
-      if (v.n2 === undefined) return `<div class="vis objs">${fiveFrames(v.n, v.emoji)}</div>`;
-      if (v.n2 < 0) return `<div class="vis objs">${fiveFrames(v.n, v.emoji, v.n + v.n2)}</div>`;   // take away: cross out |n2| objects
-      return `<div class="vis objs two"><div class="grp">${fiveFrames(v.n, v.emoji)}</div><div class="plus">${v.emoji2 && v.emoji2 !== v.emoji ? 'or' : '+'}</div><div class="grp">${fiveFrames(v.n2, v.emoji2 ?? v.emoji)}</div></div>`;
-    }
+    case 'objects': return objectsHTML(v);
     case 'tenframe': {
       const total = v.n + (v.n2 ?? 0);
       const frames = Math.max(1, Math.ceil(Math.max(total, 1) / 10));
@@ -94,6 +97,7 @@ export function renderVisual(v: Visual | undefined): string {
     }
     case 'chart': return v.kind === 'bar' ? barChartSVG(v) : chartHTML(v);   // the bar chart is its own module (#1076); tally, block and pictogram output is unchanged
     case 'symmetry': return symmetryHtml(v);
+    case 'geometry': return geometrySVG(v);
     case 'word': return `<div class="vis wordcard">${v.emoji ? `<span class="emoji">${v.emoji}</span>` : ''}<span class="txt">${esc(v.text)}</span></div>`;
     case 'sentence': return `<div class="vis sentence">${esc(v.text).replace(/_+/g, '<u class="gap">&nbsp;&nbsp;&nbsp;</u>').replace(/\n/g, '<br>')}</div>`;
     case 'strip': return `<div class="vis strip">${esc(v.text).replace(/_+/g, '<u class="gap">&nbsp;&nbsp;&nbsp;</u>')}</div>`;

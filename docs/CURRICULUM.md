@@ -168,6 +168,7 @@ Maths:
 - y3-tenths — counting in tenths on a 6-tick line as fractions (`2/10 … ?`, d1); as decimals across a whole, or one tenth more or less (d2); ÷ 10 of a one-digit number with the notation named, and how many tenths make 1–3, with `slow` (d3). Never offers both notations of one value
 - y3-fracof — unit fractions of 4–12 stars with a picture (d1), unit and non-unit fractions of wholes up to 60 (d2), the whole from a part, or non-unit fractions of wholes up to 80, with `slow` (d3)
 - y3-fracequiv — equivalent fractions: the shaded bar matched to an equal fraction (d1), "which is equal to" with no picture, both ways round (d2), the missing top or bottom of an equal pair (d3)
+- y3-angles — right angles, turns and lines: is this a right angle, or how many right angles make a half-turn (d1); which of three lettered angles is right, less or greater than a right angle (d2); which of three lines is horizontal or vertical, or which pair is parallel or perpendicular (d3); drawn by the `geometry` visual, answers read from its parts
 
 Writing:
 - y3-an — a or an for the gap in a sentence: a noun follows (d1), an adjective sits between so it decides (d2), the sound not the letter decides — an hour, a unicorn — mixed with d2 (d3); always two bubbles, `a` and `an`
