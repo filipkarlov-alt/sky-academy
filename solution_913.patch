@@ -1,0 +1,16 @@
+diff --git a/src/game/parents.ts b/src/game/parents.ts
+index 58-100 58-100
+--- a/src/game/parents.ts
++++ b/src/game/parents.ts
+@@ -60,6 +60,10 @@ export function parentSummary(parentId: UserId, best: Best, year: Year): ParentSum
+     bests,
+     whereToHelp,
+   ];
++
++  const trophyLessTopics = Object.keys(bests).filter(
++    topic => !trophyFor(bests[topic], year)
++  );
++
+   return {
+     ...summary,
+     trophyLessTopics,
