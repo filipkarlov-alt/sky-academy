@@ -1,0 +1,17 @@
+diff --git a/src/game/parents.ts b/src/game/parents.ts
+index 5e0a123..8b92f7e 100644
+--- a/src/game/parents.ts
++++ b/src/game/parents.ts
+@@ -75,6 +75,12 @@ export function parentSummary(parentId: string): ParentSummary {
+         }
+     }
+ 
++    const trophyLessTopics: Topic[] = [];
++    for (const id in progress) {
++        if (trophyFor(best[id], year) === null) {
++            trophyLessTopics.push(trophyTopics[id]);
++        }
++    }
+ 
+     return {
+         stars: starsSummary,
