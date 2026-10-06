@@ -1,0 +1,21 @@
+diff --git a/src/game/parents.ts b/src/game/parents.ts
+index 1234abcd...ef567890 100644
+--- a/src/game/parents.ts
++++ b/src/game/parents.ts
+@@ -75,6 +75,14 @@ export function parentSummary() {
+     },
+     whereToHelp: "Sprint",
+     modeBests: modeBests,
++    trophyLessTopics: getTrophyLessTopics(),
++  };
++}
++
++function getTrophyLessTopics(): string[] {
++  const topics = Object.keys(progress);
++  const trophyLessTopics = topics.filter(
++    (topic) => !trophyFor(progress[topic].sprint, year)
++  );
++  return trophyLessTopics;
+ }
+ 
+ export function progressById(id: string): GameProgress {
