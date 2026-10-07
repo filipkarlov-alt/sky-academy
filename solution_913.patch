@@ -1,0 +1,15 @@
+diff --git a/src/game/parents.ts b/src/game/parents.ts
+index 1234abcd...ef012345 100644
+--- a/src/game/parents.ts
++++ b/src/game/parents.ts
+@@ -75,6 +75,10 @@ export function parentSummary(gameProgress: GameProgress, parent: Parent): Parent
+     const suggestedTopics = gameProgress.topics.filter(topic => !trophyFor(topic.best, year));
+     summary.suggestedTopics = suggestedTopics.map(topic => `Have a go at a ${topic.name} Sprint`);
+     return summary;
++  } else {
++    // Fallback for future-proofing
++    return summary;
++  }
+ }
+ 
+ export function parentDashboard(gameProgress: GameProgress, parent: Parent): ParentDashboard {
