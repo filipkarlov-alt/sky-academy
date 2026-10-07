@@ -1,0 +1,18 @@
+diff --git a/src/game/parents.ts b/src/game/parents.ts
+index 1234567..89abcdef 100644
+--- a/src/game/parents.ts
++++ b/src/game/parents.ts
+@@ -70,6 +70,13 @@ export function parentSummary(best: GameProgress, year: Year): ParentSummary {
+     "Where to help": whereToHelp,
+     "Mode bests": modeBests,
+   };
++
++  const trophyLessTopics = Object.keys(best.sprintProgress)
++    .filter(topic => !trophyFor(best.sprintProgress[topic], year));
++  summary.trophyLessTopics = trophyLessTopics.length > 0 ? trophyLessTopics : null;
++
++  if (summary.trophyLessTopics) {
++    summary.nextSteps = summary.trophyLessTopics.map(topic => `Have a go at a ${topic} Sprint`);
++  }
+   return summary;
+ }
