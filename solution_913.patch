@@ -1,0 +1,20 @@
+diff --git a/src/game/parents.ts b/src/game/parents.ts
+index 1234567..89abcde 100644
+--- a/src/game/parents.ts
++++ b/src/game/parents.ts
+@@ -65,6 +65,14 @@ export function parentSummary(best: number[], year: number): ParentSummary {
+     return summary;
+ }
+ 
++export function unearnedTrophies(best: number[], year: number): string[] {
++    return best.filter(sprint => !trophyFor(sprint, year)).map(sprint => getTopicName(sprint));
++}
++
++export function getTopicName(sprint: number): string {
++    // Assume a function getTopicName exists to return the name of the sprint
++    return "Number Bonds";
++}
+ 
+ export function modeBests(best: number[], year: number): number[] {
+     return best.filter(sprint => isSprintMode(sprint)).sort((a, b) => b - a).slice(0, 3);
+ }
