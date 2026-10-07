@@ -1,0 +1,24 @@
+diff --git a/src/game/parents.ts b/src/game/parents.ts
+index 1234567..89abcde 100644
+--- a/src/game/parents.ts
++++ b/src/game/parents.ts
+@@ -70,6 +70,14 @@ export function parentSummary(
+       whereToHelp: string,
+       modeBests: string,
+     ],
++    trophyTopics: Topic[],
+   ) {
+     return {
+       stars: stars,
++      accuracy: accuracy,
++      whereToHelp: whereToHelp,
++      modeBests: modeBests,
++      trophyTopics: trophyTopics,
++    };
++  }
++
++export function getTrophyTopics(best: Best, year: Year): Topic[] {
++    return trophyFor(best, year).map(trophy => {
++        const topic = getTopicByTrophy(trophy);
++        return topic ? [topic] : [];
++    }).flat();
