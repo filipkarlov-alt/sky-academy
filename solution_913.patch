@@ -1,0 +1,21 @@
+diff --git a/src/game/parents.ts b/src/game/parents.ts
+index 9876543..2f87654 100644
+--- a/src/game/parents.ts
++++ b/src/game/parents.ts
+@@ -85,6 +85,16 @@ export function parentSummary(
+     }
+   }
+ 
++  const unearnedTrophies = [];
++  for (const id in progress) {
++    if (progress[id].sprint && !trophyFor(best, year)(id)) {
++      unearnedTrophies.push(id);
++    }
++  }
++
++  if (unearnedTrophies.length > 0) {
++    summary.add("Trophies to earn", unearnedTrophies);
++  }
++
+   return summary;
+ }
