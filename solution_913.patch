@@ -1,0 +1,38 @@
+diff --git a/src/game/parents.ts b/src/game/parents.ts
+--- a/src/game/parents.ts
++++ b/src/game/parents.ts
+@@ -68,6 +68,16 @@ export function parentSummary(user: User): ParentSummary {
+     },
+   };
+ 
++  const trophyLessTopics = user.progress.filter(
++    (progress) => !progress.sprint.trophy && progress.sprint.year === currentYear
++  ).map((progress) => progress.sprint.topic);
++
++  if (trophyLessTopics.length > 0) {
++    summary.topics.push({
++      title: "Topics without a Sprint trophy yet",
++      topics: trophyLessTopics,
++    });
++  }
++
+   return summary;
+ }
+ 
+diff --git a/src/ui/parents.ts b/src/ui/parents.ts
+--- a/src/ui/parents.ts
++++ b/src/ui/parents.ts
+@@ -190,6 +190,12 @@ function renderParentDashboard(parent: Parent): string {
+       <h3>Where to help</h3>
+       <p>{whereToHelp}</p>
+     </Fragment>
++    {topicsWithoutTrophy && (
++      <Fragment>
++        <h3>Topics without a Sprint trophy yet</h3>
++        <ul>
++          {topicsWithoutTrophy.map(topic => <li key={topic}>{topic}</li>)}
++        </ul>
++      </Fragment>
++    )}
+   </Fragment>
+ );
